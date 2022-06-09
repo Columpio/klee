@@ -17,10 +17,13 @@
 #include "klee/Module/Cell.h"
 #include "klee/Module/InstructionInfoTable.h"
 #include "klee/Module/KInstruction.h"
+#include "klee/Module/KType.h"
 #include "klee/Module/KModule.h"
 #include "klee/Support/Debug.h"
 #include "klee/Support/ErrorHandling.h"
 #include "klee/Support/ModuleUtil.h"
+#include "llvm/IR/InstIterator.h"
+
 
 #include "llvm/Bitcode/BitcodeWriter.h"
 #if LLVM_VERSION_CODE < LLVM_VERSION(8, 0)
@@ -35,6 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueSymbolTable.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Linker/Linker.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
@@ -50,6 +54,8 @@
 #endif
 
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 using namespace llvm;
 using namespace klee;
@@ -398,7 +404,6 @@ void KModule::manifest(InterpreterHandler *ih, bool forceSourceOutput) {
   }
 
   /* Build shadow structures */
-
   infos = std::unique_ptr<InstructionInfoTable>(
       new InstructionInfoTable(*module.get()));
 
@@ -454,6 +459,8 @@ void KModule::manifest(InterpreterHandler *ih, bool forceSourceOutput) {
     llvm::errs() << "]\n";
   }
 }
+
+
 
 void KModule::checkModule() {
   InstructionOperandTypeCheckPass *operandTypeCheckPass =
@@ -612,11 +619,17 @@ KFunction::KFunction(llvm::Function *_function,
   unsigned n = 0;
   // The first arg_size() registers are reserved for formals.
   unsigned rnum = numArgs;
-  for (llvm::Function::iterator bbit = function->begin(), 
+
+  std::map<llvm::Value *, llvm::Type *> bitcastToType;
+  for (llvm::Function::iterator bbit = function->begin(),
          bbie = function->end(); bbit != bbie; ++bbit) {
     for (llvm::BasicBlock::iterator it = bbit->begin(), ie = bbit->end();
-         it != ie; ++it)
+         it != ie; ++it) {
+      if (it->getOpcode() == Instruction::BitCast && bitcastToType.count(it->getOperand(0)) == 0) {
+        bitcastToType.emplace(it->getOperand(0), it->getType());
+      }
       registerMap[&*it] = rnum++;
+    }
   }
   numRegisters = rnum;
   
@@ -635,12 +648,13 @@ KFunction::KFunction(llvm::Function *_function,
       Value *fp = cs.getCalledValue();
 #endif
       Function *f = getTargetFunction(fp);
-      KCallBlock *ckb = new KCallBlock(this, &*bbit, parent, registerMap,
-                                       reg2inst, f, &instructions[n]);
+      KCallBlock *ckb = KCallBlock::computeKCallBlock(
+          this, &*bbit, parent, registerMap, regToInst, f, &instructions[n],
+          bitcastToType);
       kCallBlocks.push_back(ckb);
       kb = ckb;
     } else
-      kb = new KBlock(this, &*bbit, parent, registerMap, reg2inst,
+      kb = new KBlock(this, &*bbit, parent, registerMap, regToInst,
                       &instructions[n]);
     for (unsigned i = 0; i < kb->numInstructions; i++, n++) {
       instructionMap[instructions[n]->inst] = instructions[n];
@@ -708,7 +722,7 @@ std::map<KBlock *, unsigned int> &KFunction::getBackwardDistance(KBlock *kb) {
 
 KBlock::KBlock(KFunction *_kfunction, llvm::BasicBlock *block, KModule *km,
                std::map<Instruction *, unsigned> &registerMap,
-               std::map<unsigned, KInstruction *> &reg2inst,
+               std::map<unsigned, KInstruction *> &regToInst,
                KInstruction **instructionsKF)
     : parent(_kfunction), basicBlock(block), numInstructions(0),
       trackCoverage(true) {
@@ -734,17 +748,56 @@ KBlock::KBlock(KFunction *_kfunction, llvm::BasicBlock *block, KModule *km,
     Instruction *inst = &*it;
     handleKInstruction(registerMap, inst, km, ki);
     instructions[i++] = ki;
-    reg2inst[registerMap[&*it]] = ki;
+    regToInst[registerMap[&*it]] = ki;
   }
 }
 
-KCallBlock::KCallBlock(KFunction *_kfunction, llvm::BasicBlock *block,
-                       KModule *km,
-                       std::map<Instruction *, unsigned> &registerMap,
-                       std::map<unsigned, KInstruction *> &reg2inst,
-                       llvm::Function *_calledFunction,
-                       KInstruction **instructionsKF)
-    : KBlock::KBlock(_kfunction, block, km, registerMap, reg2inst,
-                     instructionsKF),
-      kcallInstruction(this->instructions[0]), calledFunction(_calledFunction) {
+const llvm::StringRef KCallAllocBlock::allocNewU = "_Znwj";
+const llvm::StringRef KCallAllocBlock::allocNewUArray = "_Znaj";
+const llvm::StringRef KCallAllocBlock::allocNewL = "_Znwm";
+const llvm::StringRef KCallAllocBlock::allocNewLArray = "_Znam";
+const llvm::StringRef KCallAllocBlock::allocMalloc = "malloc";
+const llvm::StringRef KCallAllocBlock::allocCalloc = "calloc";
+const llvm::StringRef KCallAllocBlock::allocMemalign = "memalign";
+const llvm::StringRef KCallAllocBlock::allocRealloc = "realloc";
+
+
+KCallBlock::KCallBlock(KFunction *_kfunction, llvm::BasicBlock *block, KModule *km,
+                    std::map<Instruction*, unsigned> &registerMap, std::map<unsigned, KInstruction*> &regToInst,
+                    llvm::Function *_calledFunction, KInstruction **instructionsKF)
+  : KBlock::KBlock(_kfunction, block, km, registerMap, regToInst, instructionsKF),
+    kcallInstruction(this->instructions[0]),
+    calledFunction(_calledFunction) {}
+
+
+KCallAllocBlock::KCallAllocBlock(KFunction *_kfunction, llvm::BasicBlock *block, KModule *km,
+                    std::map<Instruction*, unsigned> &registerMap, std::map<unsigned, KInstruction*> &regToInst,
+                    llvm::Function *_calledFunction, KInstruction **instructionsKF, llvm::Type *allocationType)
+  : KCallBlock::KCallBlock(_kfunction, block, km, registerMap, regToInst, _calledFunction, instructionsKF), 
+    allocationType(allocationType) {}
+
+
+KCallBlock *KCallBlock::computeKCallBlock(KFunction *_kfunction, llvm::BasicBlock *block, KModule *km,
+                    std::map<Instruction*, unsigned> &registerMap, std::map<unsigned, KInstruction*> &regToInst,
+                    llvm::Function *_calledFunction, KInstruction **instructionsKF,
+                    std::map<llvm::Value *, llvm::Type *> &bitcastToType) {
+  if (_calledFunction) {
+    llvm::StringRef functionName = _calledFunction->getName();
+    llvm::Instruction *it = &*(block->begin());
+    if (functionName.compare(KCallAllocBlock::allocNewU) == 0 ||
+        functionName.compare(KCallAllocBlock::allocNewL) == 0 ||
+        functionName.compare(KCallAllocBlock::allocNewUArray) == 0 ||
+        functionName.compare(KCallAllocBlock::allocNewLArray) == 0) {
+      assert(bitcastToType.count(it) && "Can not find associated bitcast");
+      return new KCallAllocBlock(_kfunction, block, km, registerMap, regToInst, _calledFunction, instructionsKF, bitcastToType[it]);
+    }
+    if (functionName.compare(KCallAllocBlock::allocMalloc) == 0 ||
+        functionName.compare(KCallAllocBlock::allocCalloc) == 0 ||
+        functionName.compare(KCallAllocBlock::allocMemalign) == 0 ||
+        functionName.compare(KCallAllocBlock::allocRealloc) == 0) {
+      return new KCallAllocBlock(_kfunction, block, km, registerMap, regToInst, _calledFunction, instructionsKF, nullptr);
+    }
+  }
+
+  return new KCallBlock(_kfunction, block, km, registerMap, regToInst, _calledFunction, instructionsKF);
 }

@@ -12,6 +12,7 @@
 
 #include "Context.h"
 #include "TimingSolver.h"
+#include "klee/Module/KType.h"
 
 #include "klee/Expr/Expr.h"
 
@@ -31,7 +32,6 @@ class BitArray;
 class ExecutionState;
 class MemoryManager;
 class Solver;
-
 class MemoryObject {
   friend class STPBuilder;
   friend class ObjectState;
@@ -64,6 +64,11 @@ public:
 
   MemoryManager *parent;
 
+
+  /// Type which can be seen through the "Aliased Type"
+  /// of that MO.
+  KType *dynamicType;
+  
   /// "Location" for which this memory object was allocated. This
   /// should be either the allocating instruction or the global object
   /// it was allocated for (or whatever else makes sense).
@@ -75,6 +80,8 @@ public:
 
 public:
   // XXX this is just a temp hack, should be removed
+
+
   explicit
   MemoryObject(uint64_t _address) 
     : id(counter++),
@@ -84,6 +91,7 @@ public:
       size(0),
       isFixed(true),
       parent(NULL),
+      dynamicType(nullptr),
       allocSite(0) {
   }
 
@@ -95,6 +103,7 @@ public:
       size(0),
       isFixed(true),
       parent(NULL),
+      dynamicType(nullptr),
       allocSite(0) {
   }
 
@@ -102,6 +111,7 @@ public:
                bool _isLocal, bool _isGlobal, bool _isFixed,
                const llvm::Value *_allocSite,
                MemoryManager *_parent,
+               KType *objectType,
                ref<Expr> _lazyInstantiatedSource = nullptr,
                unsigned _timestamp = 0 /* unuse if _lazyInstantiatedSource not null*/)
     : id(counter++),
@@ -115,6 +125,7 @@ public:
       isFixed(_isFixed),
       isUserSpecified(false),
       parent(_parent), 
+      dynamicType(objectType),
       allocSite(_allocSite) {
     if (lazyInstantiatedSource) {
       timestamp = _timestamp;

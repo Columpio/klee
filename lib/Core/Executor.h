@@ -75,6 +75,7 @@ namespace klee {
   class KInstIterator;
   class KModule;
   class MemoryManager;
+  class TypeManager;
   class MemoryObject;
   class ObjectState;
   class PTree;
@@ -128,6 +129,8 @@ private:
   ExternalDispatcher *externalDispatcher;
   TimingSolver *solver;
   MemoryManager *memory;
+  TypeManager *typeSystemManager;
+
   std::set<ExecutionState*, ExecutionStateIDCompare> states;
   std::set<ExecutionState*, ExecutionStateIDCompare> pausedStates;
   StatsTracker *statsTracker;
@@ -135,7 +138,7 @@ private:
   SpecialFunctionHandler *specialFunctionHandler;
   TimerGroup timers;
   std::unique_ptr<PTree> processTree;
-  ExprHashMap<std::pair<ref<Expr>, unsigned>> gepExprBases;
+  ExprHashMap<std::pair<ref<Expr>, llvm::Type *>> gepExprBases;
   ExprHashMap<ref<Expr>> gepExprOffsets;
 
   /// Used to track states that have been added during the current
@@ -246,7 +249,7 @@ private:
 
   // Given a concrete object in our [klee's] address space, add it to 
   // objects checked code can reference.
-  MemoryObject *addExternalObject(ExecutionState &state, void *addr, 
+  MemoryObject *addExternalObject(ExecutionState &state, void *addr, KType *, 
                                   unsigned size, bool isReadOnly);
 
   void initializeGlobalAlias(const llvm::Constant *c);
@@ -284,6 +287,7 @@ private:
                                  ExecutionState*> > ExactResolutionList;
   void resolveExact(ExecutionState &state,
                     ref<Expr> p,
+                    KType *type,
                     ExactResolutionList &results,
                     const std::string &name);
 
@@ -310,6 +314,7 @@ private:
                     ref<Expr> size,
                     bool isLocal,
                     KInstruction *target,
+                    KType *type,
                     bool zeroMemory=false,
                     const ObjectState *reallocFrom=0,
                     size_t allocationAlignment=0);
@@ -342,19 +347,25 @@ private:
   // and perform the operation
   void executeMemoryOperation(ExecutionState &state,
                               MemoryOperation operation,
+                              KType *targetType,
                               ref<Expr> address,
                               ref<Expr> value /* undef if read */,
                               KInstruction *target /* undef if write */);
 
-  ObjectPair lazyInstantiate(ExecutionState &state, bool isLocal,
+  ObjectPair lazyInstantiate(ExecutionState &state,
+                             KType *type,
+                             bool isLocal,
                              const MemoryObject *mo);
 
   ObjectPair lazyInstantiateAlloca(ExecutionState &state,
                                    const MemoryObject *mo, KInstruction *target,
                                    bool isLocal);
 
-  ObjectPair lazyInstantiateVariable(ExecutionState &state, ref<Expr> address,
-                                     KInstruction *target, uint64_t size);
+  ObjectPair lazyInstantiateVariable(ExecutionState &state,
+                                     ref<Expr> address,
+                                     KInstruction *target,
+                                     KType *targetType,
+                                     uint64_t size);
 
   void executeMakeSymbolic(ExecutionState &state, const MemoryObject *mo,
                            const std::string &name, bool isLocal);

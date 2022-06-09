@@ -13,12 +13,14 @@
 #include "Memory.h"
 #include "TimingSolver.h"
 
+#include "klee/Module/KType.h"
 #include "klee/Expr/Expr.h"
 #include "klee/Statistics/TimerStatIncrementer.h"
 
 #include "CoreStats.h"
 
 using namespace klee;
+
 
 ///
 
@@ -54,7 +56,8 @@ ObjectState *AddressSpace::getWriteable(const MemoryObject *mo,
 
 /// 
 
-bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr, 
+bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr,
+                              KType *objectType, 
                               ObjectPair &result) const {
   uint64_t address = addr->getZExtValue();
   MemoryObject hack(address);
@@ -65,6 +68,9 @@ bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr,
     // [mo->address, mo->address + mo->size) or the object is a 0-sized object.
     if ((mo->size==0 && address==mo->address) ||
         (address - mo->address < mo->size)) {
+      if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
+        return false;
+      }
       result.first = res->first;
       result.second = res->second.get();
       return true;
@@ -77,10 +83,11 @@ bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr,
 bool AddressSpace::resolveOne(ExecutionState &state,
                               TimingSolver *solver,
                               ref<Expr> address,
+                              KType *objectType,
                               ObjectPair &result,
                               bool &success) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(address)) {
-    success = resolveOne(CE, result);
+    success = resolveOne(CE, objectType, result);
     return true;
   } else {
     TimerStatIncrementer timer(stats::resolveTime);
@@ -188,10 +195,11 @@ bool AddressSpace::resolveOne(ExecutionState &state,
 }
 
 bool AddressSpace::fastResolveOne(ExecutionState &state, TimingSolver *solver,
-                                  ref<Expr> address, ObjectPair &result,
-                                  bool &success, unsigned timestamp) const {
+                                  ref<Expr> address, KType *objectType,
+                                  ObjectPair &result, bool &success,
+                                  unsigned timestamp) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(address)) {
-    success = resolveOne(CE, result);
+    success = resolveOne(CE, objectType, result);
     return true;
   } else {
     TimerStatIncrementer timer(stats::resolveTime);
@@ -200,8 +208,10 @@ bool AddressSpace::fastResolveOne(ExecutionState &state, TimingSolver *solver,
     for (auto &moa : state.symbolics) {
       if (moa.first->isLazyInstantiated() &&
           moa.first->getLazyInstantiatedSource() == address) {
-        symHack = const_cast<MemoryObject *>(moa.first.get());
-        break;
+        if (!StrictAliasingRule || moa.first->dynamicType->isAccessableFrom(objectType)) {
+          symHack = const_cast<MemoryObject *>(moa.first.get());
+          break;
+        }
       }
     }
 
@@ -227,10 +237,12 @@ bool AddressSpace::fastResolveOne(ExecutionState &state, TimingSolver *solver,
     if (res) {
       const MemoryObject *mo = res->first;
       if (example - mo->address < mo->size) {
-        result.first = res->first;
-        result.second = res->second.get();
-        success = true;
-        return true;
+        if (!StrictAliasingRule || mo->dynamicType->isAccessableFrom(objectType)) {
+          result.first = res->first;
+          result.second = res->second.get();
+          success = true;
+          return true;
+        }
       }
     }
 
@@ -244,8 +256,13 @@ bool AddressSpace::fastResolveOne(ExecutionState &state, TimingSolver *solver,
     while (oi!=begin) {
       --oi;
       const auto &mo = oi->first;
-      if (mo == nullptr || mo->timestamp > timestamp || !state.inSymbolics(mo))
+
+      if (mo == nullptr || mo->timestamp > timestamp ||
+          !state.inSymbolics(mo) ||
+          (StrictAliasingRule &&
+           !mo->dynamicType->isAccessableFrom(objectType))) {
         continue;
+      }
 
       bool mayBeTrue;
       if (!solver->mayBeTrue(state.constraints,
@@ -271,8 +288,13 @@ bool AddressSpace::fastResolveOne(ExecutionState &state, TimingSolver *solver,
     // search forwards
     for (oi=start; oi!=end; ++oi) {
       const auto &mo = oi->first;
-      if (mo == nullptr || mo->timestamp > timestamp || !state.inSymbolics(mo))
+
+      if (mo == nullptr || mo->timestamp > timestamp ||
+          !state.inSymbolics(mo) ||
+          (StrictAliasingRule &&
+           !mo->dynamicType->isAccessableFrom(objectType))) {
         continue;
+      }
 
       bool mustBeTrue;
       if (!solver->mustBeTrue(state.constraints,
@@ -339,11 +361,12 @@ int AddressSpace::checkPointerInObject(ExecutionState &state,
 }
 
 bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
-                           ref<Expr> p, ResolutionList &rl,
+                           ref<Expr> p, KType *objectType,
+                           ResolutionList &rl,
                            unsigned maxResolutions, time::Span timeout) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(p)) {
     ObjectPair res;
-    if (resolveOne(CE, res))
+    if (resolveOne(CE, objectType, res))
       rl.push_back(res);
     return false;
   } else {
@@ -353,11 +376,14 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     for (auto &moa : state.symbolics) {
       if (moa.first->isLazyInstantiated() &&
           moa.first->getLazyInstantiatedSource() == p) {
-        symHack = const_cast<MemoryObject *>(moa.first.get());
-        break;
+        if (!StrictAliasingRule || moa.first->dynamicType->isAccessableFrom(objectType)) {
+          symHack = const_cast<MemoryObject *>(moa.first.get());
+          break;
+        }
       }
     }
 
+    // Here symHack should already have an appropriate type
     if (symHack) {
       auto osi = objects.find(symHack);
       if (osi != objects.end()) {
@@ -398,9 +424,13 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     while (oi != begin) {
       --oi;
       const MemoryObject *mo = oi->first;
+      if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
+        continue;
+      }
+
       if (timeout && timeout < timer.delta())
         return true;
-
+      
       auto op = std::make_pair<>(mo, oi->second.get());
 
       int incomplete =
@@ -420,6 +450,10 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     // search forwards
     for (oi = start; oi != end; ++oi) {
       const MemoryObject *mo = oi->first;
+      if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
+        continue;
+      }
+
       if (timeout && timeout < timer.delta())
         return true;
 
@@ -443,13 +477,12 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
 }
 
 bool AddressSpace::fastResolve(ExecutionState &state, TimingSolver *solver,
-                               ref<Expr> p, ResolutionList &rl,
-                               unsigned maxResolutions,
-                               time::Span timeout,
-                               unsigned timestamp) const {
+                               ref<Expr> p, KType *objectType,
+                               ResolutionList &rl, unsigned maxResolutions,
+                               time::Span timeout, unsigned timestamp) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(p)) {
     ObjectPair res;
-    if (resolveOne(CE, res))
+    if (resolveOne(CE, objectType, res))
       rl.push_back(res);
     return false;
   } else {
@@ -459,8 +492,10 @@ bool AddressSpace::fastResolve(ExecutionState &state, TimingSolver *solver,
     for (auto &moa : state.symbolics) {
       if (moa.first->isLazyInstantiated() &&
           moa.first->getLazyInstantiatedSource() == p) {
-        symHack = const_cast<MemoryObject *>(moa.first.get());
-        break;
+        if (!StrictAliasingRule || moa.first->dynamicType->isAccessableFrom(objectType)) {
+          symHack = const_cast<MemoryObject *>(moa.first.get());
+          break;
+        }
       }
     }
 
@@ -505,12 +540,16 @@ bool AddressSpace::fastResolve(ExecutionState &state, TimingSolver *solver,
     while (oi != begin) {
       --oi;
       const MemoryObject *mo = oi->first;
-      if (mo == nullptr || mo->timestamp > timestamp || !state.inSymbolics(mo))
+
+      if (mo == nullptr || mo->timestamp > timestamp ||
+          !state.inSymbolics(mo) ||
+          (StrictAliasingRule &&
+           !mo->dynamicType->isAccessableFrom(objectType)))
         continue;
 
       if (timeout && timeout < timer.delta())
         return true;
-
+      
       auto op = std::make_pair<>(mo, oi->second.get());
 
       int incomplete =
@@ -532,6 +571,10 @@ bool AddressSpace::fastResolve(ExecutionState &state, TimingSolver *solver,
       const MemoryObject *mo = oi->first;
       if (mo == nullptr || mo->timestamp > timestamp || !state.inSymbolics(mo))
         continue;
+
+      if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
+        continue;
+      }
 
       if (timeout && timeout < timer.delta())
         return true;
