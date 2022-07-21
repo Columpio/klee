@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <assert.h>
 #include <stdlib.h>
-#include "klee.h"
+#include "klee/klee.h"
 #else
 void klee_make_symbolic(void *addr, unsigned int nbytes, const char *name);
 void klee_assume(_Bool condition);
@@ -78,10 +78,8 @@ double __VERIFIER_nondet_double(void) {
 }
 
 void* __VERIFIER_nondet_pointer(void) {
-  int size = 1024;
-  char* obj = (char*) calloc(1, size); 
-  //klee_make_symbolic(obj, size, "obj");
-  
+  char* obj;
+  klee_make_symbolic(&obj, sizeof(obj), "obj");
   return obj;
 }
 

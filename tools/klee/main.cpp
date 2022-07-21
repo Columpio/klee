@@ -185,7 +185,7 @@ namespace {
                             "program not yet covered. "
                             "These steps are repeated until all blocks of the "
                             "program are covered")),
-      cl::init(ExecutionKind::Guided), cl::desc("Kind of execution mode"),
+      cl::init(ExecutionKind::Default), cl::desc("Kind of execution mode"),
       cl::cat(StartCat));
 
   /*** Linking options ***/

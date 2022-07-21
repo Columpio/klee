@@ -283,6 +283,8 @@ public:
   ExecutionState *empty();
   ExecutionState *copy();
 
+  bool inSymbolics(const MemoryObject* mo);
+
   void pushFrame(KInstIterator caller, KFunction *kf);
   void popFrame();
 

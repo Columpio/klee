@@ -130,11 +130,11 @@ cl::opt<std::string> MaxTime(
     cl::init("0s"),
     cl::cat(TerminationCat));
 
-cl::opt<bool> UseGEPExpr("use-gep-expr", cl::init(true),
+cl::opt<bool> UseGEPExpr("use-gep-expr", cl::init(false),
                          cl::desc("Kind of execution mode"), cl::cat(ExecCat));
 
 cl::opt<bool>
-    LazyInstantiation("lazy-instantiation", cl::init(true),
+    LazyInstantiation("lazy-instantiation", cl::init(false),
                       cl::desc("Enable lazy instantiation (default=true)"),
                       cl::cat(ExecCat));
 
@@ -162,6 +162,11 @@ cl::opt<bool> EmitAllErrors(
              "(default=false, i.e. one per (error,instruction) pair)"),
     cl::cat(TestGenCat));
 
+cl::opt<bool> SkipNotLazyAndSymbolicPointers(
+    "skip-not-lazy-and-symbolic-pointers", cl::init(true),
+    cl::desc("Set pointers only on lazy and make_symbolic variables "
+             "(default=false)"),
+    cl::cat(TestGenCat));
 
 /* Constraint solving options */
 
@@ -4502,10 +4507,23 @@ void Executor::executeMemoryOperation(ExecutionState &state,
   ResolutionList rl;  
   solver->setTimeout(coreSolverTimeout);
   bool incomplete;
-  if (UseGEPExpr && isGEPExpr(address))
-      incomplete = state.addressSpace.resolve(state, solver, base, rl, 0, coreSolverTimeout);
-  else
-      incomplete = state.addressSpace.resolve(state, solver, address, rl, 0, coreSolverTimeout);
+
+  if (SkipNotLazyAndSymbolicPointers) {
+    if (UseGEPExpr && isGEPExpr(address))
+      incomplete = state.addressSpace.fastResolve(
+          state, solver, base, rl, 0,
+          coreSolverTimeout);
+    else
+      incomplete = state.addressSpace.fastResolve(state, solver, address,
+                                                  rl, 0, coreSolverTimeout);
+  } else {
+    if (UseGEPExpr && isGEPExpr(address))
+      incomplete = state.addressSpace.resolve(state, solver, base, rl, 0,
+                                              coreSolverTimeout);
+    else
+      incomplete = state.addressSpace.resolve(state, solver, address, rl, 0,
+                                              coreSolverTimeout);
+  }
 
   solver->setTimeout(time::Span());
   
@@ -4675,7 +4693,8 @@ void Executor::executeMakeSymbolic(ExecutionState &state,
     // Find a unique name for this array.  First try the original name,
     // or if that fails try adding a unique identifier.
     const Array *array = makeArray(state, mo->size, name);
-    const_cast<Array *>(array)->binding = mo;
+    const_cast<Array*>(array)->binding = mo;
+    const_cast<MemoryObject *>(mo)->isKleeMakeSymbolic = true;
     bindObjectInState(state, mo, isLocal, array);
     state.addSymbolic(mo, array);
     
