@@ -176,6 +176,7 @@ public:
                                    TestCase &res) = 0;
 
   virtual int resolveLazyInstantiation(ExecutionState& state) = 0;
+
   virtual void setInstantiationGraph(ExecutionState& state, TestCase& tc) = 0;
 
   virtual void logState(ExecutionState &state, int id,

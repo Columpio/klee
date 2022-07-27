@@ -162,10 +162,15 @@ cl::opt<bool> EmitAllErrors(
              "(default=false, i.e. one per (error,instruction) pair)"),
     cl::cat(TestGenCat));
 
-cl::opt<bool> SkipNotLazyAndSymbolicPointers(
-    "skip-not-lazy-and-symbolic-pointers", cl::init(true),
-    cl::desc("Set pointers only on lazy and make_symbolic variables "
-             "(default=false)"),
+cl::opt<bool> SkipNotSymbolicObjects(
+    "skip-not-symbolic-objects", cl::init(true),
+    cl::desc("Set pointers only on symbolic objects (default=true)"),
+    cl::cat(TestGenCat));
+
+cl::opt<bool> UseTimestamps(
+    "use-timestamps", cl::init(true),
+    cl::desc("Set symbolic pointers only to objects created before those "
+             "pointers were created (default=false)"),
     cl::cat(TestGenCat));
 
 /* Constraint solving options */
@@ -2769,10 +2774,14 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
       offset = AddExpr::create(offset, Expr::createPointer(kgepi->offset));
     ref<Expr> address = AddExpr::create(base, offset);
     if (UseGEPExpr && !isa<ConstantExpr>(address) && !isa<ConstantExpr>(base)) {
-      if (isGEPExpr(base))
+      if (isGEPExpr(base)) {
         gepExprBases[address] = gepExprBases[base];
-      else
+        gepExprOffsets[address] = gepExprOffsets[base];
+      }
+      else {
         gepExprBases[address] = {base, sourceSize};
+        gepExprOffsets[address] = ExtractExpr::create(offset, 0, Expr::Int32);
+      }
     }
     bindLocal(ki, state, address);
     break;
@@ -4445,10 +4454,27 @@ void Executor::executeMemoryOperation(ExecutionState &state,
   ObjectPair op;
   bool success;
   solver->setTimeout(coreSolverTimeout);
-  if (!state.addressSpace.resolveOne(state, solver, address, op, success)) {
-    address = toConstant(state, address, "resolveOne failure");
-    success = state.addressSpace.resolveOne(cast<ConstantExpr>(address), op);
+  
+  if (SkipNotSymbolicObjects) {
+    unsigned timestamp = -1;
+    if (UseTimestamps && !isa<ConstantExpr>(address)) {
+      std::pair<const MemoryObject *, ref<Expr>> moBasePair;
+      int status = getBase(base, moBasePair);
+      if (status == 1) {
+        timestamp = moBasePair.first->timestamp;
+      }
+    }
+    if (!state.addressSpace.fastResolveOne(state, solver, address, op, success, timestamp)) {
+      address = toConstant(state, address, "resolveOne failure");
+      success = state.addressSpace.resolveOne(cast<ConstantExpr>(address), op);
+    }
+  } else {
+    if (!state.addressSpace.resolveOne(state, solver, address, op, success)) {
+      address = toConstant(state, address, "resolveOne failure");
+      success = state.addressSpace.resolveOne(cast<ConstantExpr>(address), op);
+    }
   }
+
   solver->setTimeout(time::Span());
 
   if (success) {
@@ -4508,14 +4534,22 @@ void Executor::executeMemoryOperation(ExecutionState &state,
   solver->setTimeout(coreSolverTimeout);
   bool incomplete;
 
-  if (SkipNotLazyAndSymbolicPointers) {
-    if (UseGEPExpr && isGEPExpr(address))
+  if (SkipNotSymbolicObjects) {
+    unsigned timestamp = -1;
+    if (UseTimestamps && !isa<ConstantExpr>(address)) {
+      std::pair<const MemoryObject *, ref<Expr>> moBasePair;
+      int status = getBase(base, moBasePair);
+      if (status == 1) {
+        timestamp = moBasePair.first->timestamp;
+      }
+    }
+    if (UseGEPExpr && isGEPExpr(address)) {
       incomplete = state.addressSpace.fastResolve(
-          state, solver, base, rl, 0,
-          coreSolverTimeout);
-    else
-      incomplete = state.addressSpace.fastResolve(state, solver, address,
-                                                  rl, 0, coreSolverTimeout);
+          state, solver, base, rl, 0, coreSolverTimeout, timestamp);
+    } else {
+      incomplete = state.addressSpace.fastResolve(
+          state, solver, address, rl, 0, coreSolverTimeout, timestamp);
+    }
   } else {
     if (UseGEPExpr && isGEPExpr(address))
       incomplete = state.addressSpace.resolve(state, solver, base, rl, 0,
@@ -4665,9 +4699,15 @@ ObjectPair Executor::lazyInstantiateVariable(ExecutionState &state,
                                              uint64_t size) {
   assert(!isa<ConstantExpr>(address));
   const llvm::Value *allocSite = target ? target->inst : nullptr;
+  std::pair<const MemoryObject *, ref<Expr>> moBasePair;
+  int status = getBase(address, moBasePair);
+  unsigned timestamp = 0;
+  if (status == 1) {
+    timestamp = moBasePair.first->timestamp;
+  }
   MemoryObject *mo =
       memory->allocate(size, false, /*isGlobal=*/false, allocSite,
-                       /*allocationAlignment=*/8, address);
+                       /*allocationAlignment=*/8, address, timestamp);
   return lazyInstantiate(state, /*isLocal=*/false, mo);
 }
 
@@ -5029,37 +5069,63 @@ void Executor::logState(ExecutionState &state, int id,
   }
 }
 
-int Executor::resolveLazyInstantiation(ExecutionState &state) {
-  int status = 0;
-  for (auto i : state.symbolics) {
-    if (!i.first->isLazyInstantiated()) {
-      continue;
-    }
-    status = 1;
-    auto lisource = i.first->lazyInstantiatedSource;
-    switch (lisource->getKind()) {
-    case Expr::Read: {
-      ref<ReadExpr> base = dyn_cast<ReadExpr>(lisource);
-      auto parent = base->updates.root->binding;
-      if (!parent) {
-        return -1;
-      }
-      state.pointers[lisource] = std::make_pair(parent, base->index);
-      break;
-    }
-    case Expr::Concat: {
-      ref<ReadExpr> base =
-          ArrayExprHelper::hasOrderedReads(*dyn_cast<ConcatExpr>(lisource));
-      auto parent = base->updates.root->binding;
-      if (!parent) {
-        return -1;
-      }
-      state.pointers[lisource] = std::make_pair(parent, base->index);
-      break;
-    }
-    default:
+int Executor::getBase(ref<Expr> expr,
+                      std::pair<const MemoryObject *, ref<Expr>> &resolved) {
+  switch (expr->getKind()) {
+  case Expr::Read: {
+    ref<ReadExpr> base = dyn_cast<ReadExpr>(expr);
+    auto parent = base->updates.root->binding;
+    if (!parent) {
       return -1;
     }
+    resolved = std::make_pair(parent, base->index);
+    break;
+  }
+  case Expr::Concat: {
+    ref<ReadExpr> base =
+        ArrayExprHelper::hasOrderedReads(*dyn_cast<ConcatExpr>(expr));
+    auto parent = base->updates.root->binding;
+    if (!parent) {
+      return -1;
+    }
+    resolved = std::make_pair(parent, base->index);
+    break;
+  }
+  default: {
+    if (UseGEPExpr && isGEPExpr(expr)) {
+      ref<Expr> gepBase = gepExprBases[expr].first;
+      ref<Expr> offset = gepExprOffsets[expr];
+      std::pair<const MemoryObject *, ref<Expr>> gepResolved;
+      int status = getBase(gepBase, gepResolved);
+      if (status == 1) {
+        auto parent = gepResolved.first;
+        auto gepIndex = gepResolved.second;
+        auto index = AddExpr::create(gepIndex, offset);
+        resolved = std::make_pair(parent, index);
+      } else
+        return status;
+    } else {
+      return -1;
+    }
+    break;
+  }
+  }
+  return 1;
+}
+
+int Executor::resolveLazyInstantiation(
+    ExecutionState &state) {
+  int status = 0;
+  for (auto &symbolic : state.symbolics) {
+    if (!symbolic.first->isLazyInstantiated()) {
+      continue;
+    }
+    auto lisource = symbolic.first->lazyInstantiatedSource;
+    std::pair<const MemoryObject *, ref<Expr>> resolvedSymbolic;
+    status = getBase(lisource, resolvedSymbolic);
+    state.pointers[lisource] = resolvedSymbolic;
+    if (status == -1)
+      return status;
   }
   return status;
 }

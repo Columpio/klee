@@ -17,6 +17,7 @@
 #include "klee/ADT/TreeStream.h"
 #include "klee/Expr/Constraints.h"
 #include "klee/Expr/Expr.h"
+#include "klee/Expr/ExprHashMap.h"
 #include "klee/Module/KInstIterator.h"
 #include "klee/Solver/Solver.h"
 #include "klee/System/Time.h"
@@ -32,6 +33,7 @@ namespace klee {
 class Array;
 class CallPathNode;
 struct Cell;
+template<class T> class ExprHashMap;
 struct KFunction;
 struct KBlock;
 struct KInstruction;
@@ -146,6 +148,9 @@ struct CleanupPhaseUnwindingInformation : public UnwindingInformation {
   }
 };
 
+
+typedef std::pair<ref<const MemoryObject>, const Array *> Symbolic;
+
 /// @brief ExecutionState representing a path under exploration
 class ExecutionState {
 #ifdef KLEE_UNITTEST
@@ -159,7 +164,7 @@ private:
 public:
   using stack_ty = std::vector<StackFrame>;
 
-  std::map<ref<Expr>, std::pair<const MemoryObject *, ref<Expr>>> pointers;
+  ExprHashMap<std::pair<const MemoryObject *, ref<Expr>>> pointers;
 
   // Execution - Control Flow specific
 
@@ -218,7 +223,7 @@ public:
   /// @brief Ordered list of symbolics: used to generate test cases.
   //
   // FIXME: Move to a shared list structure (not critical).
-  std::vector<std::pair<ref<const MemoryObject>, const Array *>> symbolics;
+  std::vector<Symbolic> symbolics;
 
   /// @brief A set of boolean expressions
   /// the user has requested be true of a counterexample.

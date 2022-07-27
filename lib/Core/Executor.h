@@ -68,6 +68,7 @@ namespace klee {
   class ExecutionState;
   class ExternalDispatcher;
   class Expr;
+  template<class T> class ExprHashMap;
   class InstructionInfoTable;
   struct KFunction;
   struct KInstruction;
@@ -134,7 +135,8 @@ private:
   SpecialFunctionHandler *specialFunctionHandler;
   TimerGroup timers;
   std::unique_ptr<PTree> processTree;
-  std::map<ref<Expr>, std::pair<ref<Expr>, unsigned>> gepExprBases;
+  ExprHashMap<std::pair<ref<Expr>, unsigned>> gepExprBases;
+  ExprHashMap<ref<Expr>> gepExprOffsets;
 
   /// Used to track states that have been added during the current
   /// instructions step. 
@@ -601,6 +603,9 @@ public:
                             Interpreter::STP) override;
 
   int resolveLazyInstantiation(ExecutionState &state) override;
+
+  int getBase(ref<Expr> expr,
+              std::pair<const MemoryObject *, ref<Expr>> &resolved);
 
   void setInstantiationGraph(ExecutionState &state, TestCase &tc) override;
 
