@@ -68,9 +68,9 @@ bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr,
     // [mo->address, mo->address + mo->size) or the object is a 0-sized object.
     if ((mo->size==0 && address==mo->address) ||
         (address - mo->address < mo->size)) {
-      if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
-        return false;
-      }
+      // if (StrictAliasingRule && !mo->dynamicType->isAccessableFrom(objectType)) {
+      //   return false;
+      // }
       result.first = res->first;
       result.second = res->second.get();
       return true;
