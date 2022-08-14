@@ -4725,7 +4725,7 @@ void Executor::executeMemoryOperation(ExecutionState &state,
       if (unbound_inner) {
         terminateStateOnError(
             *unbound_inner, "memory error: out of bound pointer",
-            StateTerminationType::Ptr, getAddressInfo(*unbound, address));
+            StateTerminationType::Ptr, getAddressInfo(*unbound_inner, address));
       }
     }
 
