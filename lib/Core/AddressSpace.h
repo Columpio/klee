@@ -83,6 +83,9 @@ namespace klee {
     /// \param[out] result An ObjectPair this address can resolve to 
     ///               (when returning true).
     /// \return true iff an object was found at \a address.
+    bool baseResolveOne(ExecutionState &state, TimingSolver *solver,
+                        ref<Expr> address, ref<Expr> base, KType *objectType,
+                        ObjectPair &result, bool &success) const;
     bool resolveOne(ExecutionState &state, TimingSolver *solver,
                     ref<Expr> address, KType *objectType, ObjectPair &result,
                     bool &success) const;
@@ -93,15 +96,25 @@ namespace klee {
     ///
     /// \return true iff the resolution is incomplete (`maxResolutions`
     /// is non-zero and it was reached, or a query timed out).
-    bool resolve(ExecutionState &state, TimingSolver *solver, ref<Expr> p,
+    bool baseResolve(ExecutionState &state, TimingSolver *solver,
+                     ref<Expr> address, ref<Expr> base, KType *objectType,
+                     ResolutionList &rl, ResolutionList &rlSkipped,
+                     unsigned maxResolutions = 0,
+                     time::Span timeout = time::Span()) const;
+    bool resolve(ExecutionState &state, TimingSolver *solver, ref<Expr> address,
                  KType *objectType, ResolutionList &rl,
                  ResolutionList &rlSkipped, unsigned maxResolutions = 0,
                  time::Span timeout = time::Span()) const;
 
     /// Resolve as above, but only to MakeSymbolic and LazyInstantiated
     /// variables
-    bool fastResolve(ExecutionState &state, TimingSolver *solver, ref<Expr> p,
-                     KType *objectType, ResolutionList &rl,
+    bool baseFastResolve(ExecutionState &state, TimingSolver *solver,
+                         ref<Expr> address, ref<Expr> base, KType *objectType,
+                         ResolutionList &rl, ResolutionList &rlSkipped,
+                         unsigned maxResolutions = 0,
+                         time::Span timeout = time::Span()) const;
+    bool fastResolve(ExecutionState &state, TimingSolver *solver,
+                     ref<Expr> address, KType *objectType, ResolutionList &rl,
                      ResolutionList &rlSkipped, unsigned maxResolutions = 0,
                      time::Span timeout = time::Span()) const;
 

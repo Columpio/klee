@@ -73,9 +73,10 @@ bool AddressSpace::resolveOne(const ref<ConstantExpr> &addr, KType *objectType,
   return false;
 }
 
-bool AddressSpace::resolveOne(ExecutionState &state, TimingSolver *solver,
-                              ref<Expr> address, KType *objectType,
-                              ObjectPair &result, bool &success) const {
+bool AddressSpace::baseResolveOne(ExecutionState &state, TimingSolver *solver,
+                                  ref<Expr> address, ref<Expr> base,
+                                  KType *objectType, ObjectPair &result,
+                                  bool &success) const {
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(address)) {
     success = resolveOne(CE, objectType, result);
     return true;
@@ -85,7 +86,7 @@ bool AddressSpace::resolveOne(ExecutionState &state, TimingSolver *solver,
     MemoryObject *symHack = nullptr;
     for (auto &moa : state.symbolics) {
       if (moa.first->isLazyInstantiated() &&
-          moa.first->getLazyInstantiatedSource() == address) {
+          moa.first->getLazyInstantiatedSource() == base) {
         symHack = const_cast<MemoryObject *>(moa.first.get());
         break;
       }
@@ -194,6 +195,13 @@ bool AddressSpace::resolveOne(ExecutionState &state, TimingSolver *solver,
   }
 }
 
+bool AddressSpace::resolveOne(ExecutionState &state, TimingSolver *solver,
+                              ref<Expr> address, KType *objectType,
+                              ObjectPair &result, bool &success) const {
+  return baseResolveOne(state, solver, address, address, objectType, result,
+                        success);
+}
+
 int AddressSpace::checkPointerInObject(ExecutionState &state,
                                        TimingSolver *solver, ref<Expr> p,
                                        const ObjectPair &op, ResolutionList &rl,
@@ -230,11 +238,13 @@ int AddressSpace::checkPointerInObject(ExecutionState &state,
   return 2;
 }
 
-bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
-                           ref<Expr> p, KType *objectType, ResolutionList &rl,
-                           ResolutionList &rlSkipped, unsigned maxResolutions,
-                           time::Span timeout) const {
-  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(p)) {
+bool AddressSpace::baseResolve(ExecutionState &state, TimingSolver *solver,
+                               ref<Expr> address, ref<Expr> base,
+                               KType *objectType, ResolutionList &rl,
+                               ResolutionList &rlSkipped,
+                               unsigned maxResolutions,
+                               time::Span timeout) const {
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(address)) {
     ObjectPair res;
     if (resolveOne(CE, objectType, res))
       rl.push_back(res);
@@ -245,7 +255,7 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     MemoryObject *symHack = nullptr;
     for (auto &moa : state.symbolics) {
       if (moa.first->isLazyInstantiated() &&
-          moa.first->getLazyInstantiatedSource() == p) {
+          moa.first->getLazyInstantiatedSource() == base) {
         symHack = const_cast<MemoryObject *>(moa.first.get());
         break;
       }
@@ -275,7 +285,7 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
     // just get this by inspection of the expr.
 
     ref<ConstantExpr> cex;
-    if (!solver->getValue(state.constraints, p, cex, state.queryMetaData))
+    if (!solver->getValue(state.constraints, address, cex, state.queryMetaData))
       return true;
     uint64_t example = cex->getZExtValue();
     MemoryObject hack(example);
@@ -286,7 +296,7 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
 
     MemoryMap::iterator start = oi;
     // search backwards, start with one minus because this
-    // is the object that p *should* be within, which means we
+    // is the object that address *should* be within, which means we
     // get write off the end with 4 queries
     while (oi != begin) {
       --oi;
@@ -302,13 +312,13 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
       auto op = std::make_pair<>(mo, oi->second.get());
 
       int incomplete =
-          checkPointerInObject(state, solver, p, op, rl, maxResolutions);
+          checkPointerInObject(state, solver, address, op, rl, maxResolutions);
       if (incomplete != 2)
         return incomplete ? true : false;
 
       bool mustBeTrue;
       if (!solver->mustBeTrue(state.constraints,
-                              UgeExpr::create(p, mo->getBaseExpr()), mustBeTrue,
+                              UgeExpr::create(address, mo->getBaseExpr()), mustBeTrue,
                               state.queryMetaData))
         return true;
       if (mustBeTrue)
@@ -328,7 +338,7 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
 
       bool mustBeTrue;
       if (!solver->mustBeTrue(state.constraints,
-                              UltExpr::create(p, mo->getBaseExpr()), mustBeTrue,
+                              UltExpr::create(address, mo->getBaseExpr()), mustBeTrue,
                               state.queryMetaData))
         return true;
       if (mustBeTrue)
@@ -336,7 +346,137 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
       auto op = std::make_pair<>(mo, oi->second.get());
 
       int incomplete =
-          checkPointerInObject(state, solver, p, op, rl, maxResolutions);
+          checkPointerInObject(state, solver, address, op, rl, maxResolutions);
+      if (incomplete != 2)
+        return incomplete ? true : false;
+    }
+  }
+
+  return false;
+}
+
+bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
+                           ref<Expr> address, KType *objectType,
+                           ResolutionList &rl, ResolutionList &rlSkipped,
+                           unsigned maxResolutions, time::Span timeout) const {
+  return baseResolve(state, solver, address, address, objectType, rl, rlSkipped,
+                     maxResolutions, timeout);
+}
+
+bool AddressSpace::baseFastResolve(ExecutionState &state, TimingSolver *solver,
+                                   ref<Expr> address, ref<Expr> base,
+                                   KType *objectType, ResolutionList &rl,
+                                   ResolutionList &rlSkipped,
+                                   unsigned maxResolutions,
+                                   time::Span timeout) const {
+  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(address)) {
+    ObjectPair res;
+    if (resolveOne(CE, objectType, res))
+      rl.push_back(res);
+    return false;
+  } else {
+    TimerStatIncrementer timer(stats::resolveTime);
+
+    MemoryObject *symHack = nullptr;
+    for (auto &moa : state.symbolics) {
+      if (moa.first->isLazyInstantiated() &&
+          moa.first->getLazyInstantiatedSource() == base) {
+        symHack = const_cast<MemoryObject *>(moa.first.get());
+        break;
+      }
+    }
+
+    if (symHack) {
+      auto osi = objects.find(symHack);
+      if (osi != objects.end()) {
+        auto res = std::make_pair<>(osi->first, osi->second.get());
+        rl.push_back(res);
+        return false;
+      }
+    }
+    // XXX in general this isn't exactly what we want... for
+    // a multiple resolution case (or for example, a \in {b,c,0})
+    // we want to find the first object, find a cex assuming
+    // not the first, find a cex assuming not the second...
+    // etc.
+
+    // XXX how do we smartly amortize the cost of checking to
+    // see if we need to keep searching up/down, in bad cases?
+    // maybe we don't care?
+
+    // XXX we really just need a smart place to start (although
+    // if its a known solution then the code below is guaranteed
+    // to hit the fast path with exactly 2 queries). we could also
+    // just get this by inspection of the expr.
+
+    ref<ConstantExpr> cex;
+    if (!solver->getValue(state.constraints, address, cex, state.queryMetaData))
+      return true;
+    uint64_t example = cex->getZExtValue();
+    MemoryObject hack(example);
+
+    MemoryMap::iterator oi = objects.upper_bound(&hack);
+    MemoryMap::iterator begin = objects.begin();
+    MemoryMap::iterator end = objects.end();
+
+    MemoryMap::iterator start = oi;
+    // search backwards, start with one minus because this
+    // is the object that address *should* be within, which means we
+    // get write off the end with 4 queries
+
+    while (oi != begin) {
+      --oi;
+      const MemoryObject *mo = oi->first;
+      if (mo == nullptr || !mo->isLazyInstantiated() ||
+          !mo->isKleeMakeSymbolic ||
+          !oi->second->isAccessableFrom(objectType)) {
+        rlSkipped.emplace_back(mo, oi->second.get());
+        continue;
+      }
+
+      if (timeout && timeout < timer.delta())
+        return true;
+
+      auto op = std::make_pair<>(mo, oi->second.get());
+
+      int incomplete =
+          checkPointerInObject(state, solver, address, op, rl, maxResolutions);
+      if (incomplete != 2)
+        return incomplete ? true : false;
+
+      bool mustBeTrue;
+      if (!solver->mustBeTrue(state.constraints,
+                              UgeExpr::create(address, mo->getBaseExpr()), mustBeTrue,
+                              state.queryMetaData))
+        return true;
+      if (mustBeTrue)
+        break;
+    }
+
+    // search forwards
+    for (oi = start; oi != end; ++oi) {
+      const MemoryObject *mo = oi->first;
+      if (mo == nullptr || !mo->isLazyInstantiated() ||
+          !mo->isKleeMakeSymbolic ||
+          !oi->second->isAccessableFrom(objectType)) {
+        rlSkipped.emplace_back(mo, oi->second.get());
+        continue;
+      }
+
+      if (timeout && timeout < timer.delta())
+        return true;
+
+      bool mustBeTrue;
+      if (!solver->mustBeTrue(state.constraints,
+                              UltExpr::create(address, mo->getBaseExpr()), mustBeTrue,
+                              state.queryMetaData))
+        return true;
+      if (mustBeTrue)
+        break;
+      auto op = std::make_pair<>(mo, oi->second.get());
+
+      int incomplete =
+          checkPointerInObject(state, solver, address, op, rl, maxResolutions);
       if (incomplete != 2)
         return incomplete ? true : false;
     }
@@ -346,124 +486,12 @@ bool AddressSpace::resolve(ExecutionState &state, TimingSolver *solver,
 }
 
 bool AddressSpace::fastResolve(ExecutionState &state, TimingSolver *solver,
-                               ref<Expr> p, KType *objectType,
+                               ref<Expr> address, KType *objectType,
                                ResolutionList &rl, ResolutionList &rlSkipped,
                                unsigned maxResolutions,
                                time::Span timeout) const {
-  if (ConstantExpr *CE = dyn_cast<ConstantExpr>(p)) {
-    ObjectPair res;
-    if (resolveOne(CE, objectType, res))
-      rl.push_back(res);
-    return false;
-  } else {
-    TimerStatIncrementer timer(stats::resolveTime);
-
-    MemoryObject *symHack = nullptr;
-    for (auto &moa : state.symbolics) {
-      if (moa.first->isLazyInstantiated() &&
-          moa.first->getLazyInstantiatedSource() == p) {
-        symHack = const_cast<MemoryObject *>(moa.first.get());
-        break;
-      }
-    }
-
-    if (symHack) {
-      auto osi = objects.find(symHack);
-      if (osi != objects.end()) {
-        auto res = std::make_pair<>(osi->first, osi->second.get());
-        rl.push_back(res);
-        return false;
-      }
-    }
-    // XXX in general this isn't exactly what we want... for
-    // a multiple resolution case (or for example, a \in {b,c,0})
-    // we want to find the first object, find a cex assuming
-    // not the first, find a cex assuming not the second...
-    // etc.
-
-    // XXX how do we smartly amortize the cost of checking to
-    // see if we need to keep searching up/down, in bad cases?
-    // maybe we don't care?
-
-    // XXX we really just need a smart place to start (although
-    // if its a known solution then the code below is guaranteed
-    // to hit the fast path with exactly 2 queries). we could also
-    // just get this by inspection of the expr.
-
-    ref<ConstantExpr> cex;
-    if (!solver->getValue(state.constraints, p, cex, state.queryMetaData))
-      return true;
-    uint64_t example = cex->getZExtValue();
-    MemoryObject hack(example);
-
-    MemoryMap::iterator oi = objects.upper_bound(&hack);
-    MemoryMap::iterator begin = objects.begin();
-    MemoryMap::iterator end = objects.end();
-
-    MemoryMap::iterator start = oi;
-    // search backwards, start with one minus because this
-    // is the object that p *should* be within, which means we
-    // get write off the end with 4 queries
-
-    while (oi != begin) {
-      --oi;
-      const MemoryObject *mo = oi->first;
-      if (mo == nullptr || !mo->isLazyInstantiated() ||
-          !mo->isKleeMakeSymbolic ||
-          !oi->second->isAccessableFrom(objectType)) {
-        rlSkipped.emplace_back(mo, oi->second.get());
-        continue;
-      }
-
-      if (timeout && timeout < timer.delta())
-        return true;
-
-      auto op = std::make_pair<>(mo, oi->second.get());
-
-      int incomplete =
-          checkPointerInObject(state, solver, p, op, rl, maxResolutions);
-      if (incomplete != 2)
-        return incomplete ? true : false;
-
-      bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints,
-                              UgeExpr::create(p, mo->getBaseExpr()), mustBeTrue,
-                              state.queryMetaData))
-        return true;
-      if (mustBeTrue)
-        break;
-    }
-
-    // search forwards
-    for (oi = start; oi != end; ++oi) {
-      const MemoryObject *mo = oi->first;
-      if (mo == nullptr || !mo->isLazyInstantiated() ||
-          !mo->isKleeMakeSymbolic ||
-          !oi->second->isAccessableFrom(objectType)) {
-        rlSkipped.emplace_back(mo, oi->second.get());
-        continue;
-      }
-
-      if (timeout && timeout < timer.delta())
-        return true;
-
-      bool mustBeTrue;
-      if (!solver->mustBeTrue(state.constraints,
-                              UltExpr::create(p, mo->getBaseExpr()), mustBeTrue,
-                              state.queryMetaData))
-        return true;
-      if (mustBeTrue)
-        break;
-      auto op = std::make_pair<>(mo, oi->second.get());
-
-      int incomplete =
-          checkPointerInObject(state, solver, p, op, rl, maxResolutions);
-      if (incomplete != 2)
-        return incomplete ? true : false;
-    }
-  }
-
-  return false;
+  return baseFastResolve(state, solver, address, address, objectType, rl,
+                         rlSkipped, maxResolutions, timeout);
 }
 
 // These two are pretty big hack so we can sort of pass memory back
