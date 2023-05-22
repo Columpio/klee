@@ -542,6 +542,13 @@ static void updateConfidences(ExecutionState *current,
     current->targetForest.divideConfidenceBy(reachableStatesOfTarget);
 }
 
+static void
+addReachable(std::unordered_set<ExecutionState *> &reachableStatesOfTarget,
+             ExecutionState *state, bool canReach) {
+  if (canReach && state->terminationReasonType != HaltExecution::SilentExit)
+    reachableStatesOfTarget.insert(state);
+}
+
 void GuidedSearcher::updateTargetedSearcherForStates(
     std::vector<ExecutionState *> &states,
     std::vector<ExecutionState *> &tmpAddedStates,
@@ -569,8 +576,7 @@ void GuidedSearcher::updateTargetedSearcherForStates(
         if (!areStatesStuck)
           canReach = updateTargetedSearcher(history, target, nullptr,
                                             tmpAddedStates, tmpRemovedStates);
-        if (canReach)
-          reachableStatesOfTarget[target].insert(state);
+        addReachable(reachableStatesOfTarget[target], state, canReach);
       }
       tmpAddedStates.clear();
       tmpRemovedStates.clear();
@@ -695,8 +701,9 @@ void GuidedSearcher::innerUpdate(
         canReach = updateTargetedSearcher(history, target, nullptr,
                                           tmpAddedStates, tmpRemovedStates);
       }
-      if (canReach)
-        reachableStatesOfTarget[target].insert(current);
+      if (std::find(baseRemovedStates.begin(), baseRemovedStates.end(),
+                    current) == baseRemovedStates.end())
+        addReachable(reachableStatesOfTarget[target], current, canReach);
       tmpAddedStates.clear();
       tmpRemovedStates.clear();
     }

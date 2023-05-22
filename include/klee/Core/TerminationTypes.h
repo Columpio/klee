@@ -70,6 +70,7 @@ enum Reason {
   MaxDepth,
   MaxStackFrames,
   MaxSolverTime,
+  SilentExit,
   Unspecified
 };
 };

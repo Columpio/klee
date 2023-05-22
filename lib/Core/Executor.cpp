@@ -4227,6 +4227,8 @@ HaltExecution::Reason fromStateTerminationType(StateTerminationType t) {
     return HaltExecution::MaxStackFrames;
   case StateTerminationType::Solver:
     return HaltExecution::MaxSolverTime;
+  case StateTerminationType::SilentExit:
+    return HaltExecution::SilentExit;
   default:
     return HaltExecution::Unspecified;
   }
