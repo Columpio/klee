@@ -65,7 +65,8 @@ tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
     }
   } else if (toolName == "clang") {
     if ("core.NullDereference" == ruleId) {
-      return {ReachWithError::NullPointerException};
+      return {ReachWithError::Reachable};
+      // return {ReachWithError::NullPointerException}; //TODO: only for debug
     } else if ("unix.Malloc" == ruleId) {
       if (errorMessage.has_value()) {
         if (errorMessage->text == "Attempt to free released memory") {

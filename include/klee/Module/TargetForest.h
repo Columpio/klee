@@ -108,7 +108,11 @@ private:
         std::unordered_map<ref<UnorderedTargetsSet>, ref<Layer>,
                            RefUnorderedTargetsSetHash,
                            RefUnorderedTargetsSetCmp>;
+
+  public:
     InternalLayer forest;
+
+  private:
     using TargetsToVector = std::unordered_map<
         ref<Target>,
         std::unordered_set<ref<UnorderedTargetsSet>, RefUnorderedTargetsSetHash,
@@ -132,10 +136,12 @@ private:
     void removeTarget(ref<Target> target);
     Layer *removeChild(ref<UnorderedTargetsSet> child) const;
 
+  public:
     confidence::ty getConfidence(confidence::ty parentConfidence) const {
       return confidence::min(parentConfidence, confidence);
     }
 
+  private:
     void collectHowManyEventsInTracesWereReached(
         std::unordered_map<unsigned, std::pair<unsigned, unsigned>>
             &traceToEventCount,
@@ -270,6 +276,7 @@ public:
   class ReferenceCounter _refCount;
   unsigned getDebugReferenceCount() { return forest->_refCount.getCount(); }
   KFunction *getEntryFunction() { return entryFunction; }
+  confidence::ty getConfidence() const;
 
   void addTrace(
       const Result &result,

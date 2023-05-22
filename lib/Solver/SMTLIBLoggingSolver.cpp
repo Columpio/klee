@@ -21,6 +21,7 @@ private:
 
   virtual void printQuery(const Query &query, const Query *falseQuery = 0,
                           const std::vector<const Array *> *objects = 0) {
+    llvm::errs() << "Calling upper solver\n";
     if (0 == falseQuery) {
       printer.setQuery(query);
     } else {

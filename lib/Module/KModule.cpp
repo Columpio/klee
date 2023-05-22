@@ -715,6 +715,8 @@ std::string KBlock::getAssemblyLocation() const {
   std::string label;
   llvm::raw_string_ostream label_stream(label);
   basicBlock->printAsOperand(label_stream);
+  label_stream << " (lines " << getFirstInstruction()->info->line << " to "
+               << getLastInstruction()->info->line << ")";
   repr += label_stream.str().substr(6);
   repr += " in function ";
   repr += parent->function->getName();

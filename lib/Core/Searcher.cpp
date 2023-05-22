@@ -359,6 +359,8 @@ bool TargetedSearcher::updateCheckCanReach(
       break;
     case Miss:
       current->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << current->id << " 2\n";
       states->remove(current);
       break;
     }
@@ -378,6 +380,8 @@ bool TargetedSearcher::updateCheckCanReach(
       break;
     case Miss:
       state->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << state->id << " 3\n";
       break;
     }
   }
@@ -396,6 +400,8 @@ bool TargetedSearcher::updateCheckCanReach(
         break;
       case Miss:
         state->targetForest.remove(target);
+        llvm::errs() << "Removing target " << target->toString()
+                     << " from state " << state->id << " 4\n";
         states->remove(state);
         break;
       case Continue:
@@ -417,6 +423,8 @@ void TargetedSearcher::printName(llvm::raw_ostream &os) {
 TargetedSearcher::~TargetedSearcher() {
   while (!states->empty()) {
     auto &state = selectState();
+    // llvm::errs() << "Removing target " << target->toString() << " from state "
+                //  << state.id << " 1\n";
     state.targetForest.remove(target);
     states->remove(&state);
   }
@@ -430,6 +438,17 @@ void TargetedSearcher::removeReached() {
   for (auto state : reachedOnLastUpdate) {
     states->remove(state);
     state->targetForest.stepTo(target);
+    size_t ml = 0;
+    for (auto l : state->multilevel)
+      ml += state->multilevel.count(l);
+    llvm::errs() << "REACHed target " << target->toString() << '\n';
+    llvm::errs() << "state depth: " << state->depth
+                 << "; state steppedInstructions: " << state->steppedInstructions
+                 << "; state multiLevel count (= blocks): " << ml
+                 << "; global forks: " << stats::forks
+                 << "; global solver time: " << stats::solverTime
+                 << '\n';
+    // state->targetForest.dump();
   }
   reachedOnLastUpdate.clear();
 }
@@ -524,10 +543,14 @@ bool GuidedSearcher::updateTargetedSearcher(
     canReach = true;
     if (current) {
       current->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << current->id << " 5\n";
     }
     assert(removedStates.empty());
     for (auto &state : addedStates) {
       state->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << state->id << " 6\n";
     }
   }
   if (targetedSearchers[history].empty())
@@ -538,8 +561,13 @@ bool GuidedSearcher::updateTargetedSearcher(
 static void updateConfidences(ExecutionState *current,
                               const GuidedSearcher::TargetToStateUnorderedSetMap
                                   &reachableStatesOfTarget) {
-  if (current)
-    current->targetForest.divideConfidenceBy(reachableStatesOfTarget);
+  if (!current)
+    return;
+  // llvm::errs() << "BEFORE update CR in " << current->id << ": "
+  //  << current->targetForest.getConfidence() << '\n';
+  current->targetForest.divideConfidenceBy(reachableStatesOfTarget);
+  // llvm::errs() << "AFTER update CR in " << current->id << ": "
+  //  << current->targetForest.getConfidence() << '\n';
 }
 
 static void
@@ -598,11 +626,15 @@ void GuidedSearcher::innerUpdate(
         (std::find(baseRemovedStates.begin(), baseRemovedStates.end(),
                    current) == baseRemovedStates.end()) &&
         isStuck(*current)) {
+      if (current->id == 13)
+        llvm::errs() << "";
       pausedStates.insert(current);
       baseRemovedStates.push_back(current);
     }
     for (const auto state : addedStates) {
       if (isStuck(*state)) {
+        if (state->id == 13)
+          llvm::errs() << "";
         pausedStates.insert(state);
         addedStuckStates.push_back(state);
         auto is =
@@ -672,6 +704,8 @@ void GuidedSearcher::innerUpdate(
           tmpAddedStates.clear();
           tmpRemovedStates.clear();
         } else {
+          if (state->id == 13)
+            llvm::errs() << "";
           pausedStates.insert(state);
           if (std::find(baseAddedStates.begin(), baseAddedStates.end(),
                         state) != baseAddedStates.end()) {
@@ -730,6 +764,12 @@ void GuidedSearcher::innerUpdate(
     updateConfidences(state, reachableStatesOfTarget);
   for (auto state : addedStuckStates)
     updateConfidences(state, reachableStatesOfTarget);
+  // llvm::errs() << "MY: Base removed states\n";
+  // for (auto state : baseRemovedStates) {
+  // updateConfidences(state, reachableStatesOfTarget);
+  // llvm::errs() << "Terminating state " << state->id << '\n';
+  // state->targetForest.dump();
+  // }
   baseAddedStates.clear();
   baseRemovedStates.clear();
 }
@@ -737,8 +777,36 @@ void GuidedSearcher::innerUpdate(
 void GuidedSearcher::update(
     ExecutionState *current, const std::vector<ExecutionState *> &addedStates,
     const std::vector<ExecutionState *> &removedStates) {
+  // auto initCR = current ? current->targetForest.getConfidence() : -1.0;
+  // llvm::errs() << "UPDATE enter: ";
+  // if (current)
+    // llvm::errs() << current->id << " " << current->targetForest.getConfidence();
+  // llvm::errs() << '\n';
   innerUpdate(current, addedStates, removedStates);
   clearReached(removedStates);
+  // klee::confidence::ty endCR = 0.0;
+  // llvm::errs() << "UPDATE exit: ";
+  // if (current) {
+  //   endCR += current->targetForest.getConfidence();
+  //   llvm::errs() << current->id << " " << current->targetForest.getConfidence();
+  // }
+  // for (auto state : addedStates) {
+  //   if (!state->targetForest.empty()) {
+  //     endCR += state->targetForest.getConfidence();
+  //     llvm::errs() << " " << state->id << " "
+  //                  << state->targetForest.getConfidence();
+  //   }
+  // }
+  // llvm::errs() << " removed: ";
+  // for (auto state : removedStates) {
+  //   if (!state->targetForest.empty()) {
+  //     llvm::errs() << " " << state->id << " "
+  //                  << state->targetForest.getConfidence();
+  //   }
+  // }
+  // llvm::errs() << '\n';
+  // if (initCR > 0.0 && initCR != endCR)
+  //   llvm::errs() << "";
 }
 
 void GuidedSearcher::collectReached(TargetToStateSetMap &reachedStates) {
@@ -1252,6 +1320,8 @@ void IterativeDeepeningTimeSearcher::update(
       std::find(removedStates.begin(), removedStates.end(), current) ==
           removedStates.end() &&
       elapsed > time) {
+    if (current->id == 13)
+      llvm::errs() << "";
     pausedStates.insert(current);
     baseSearcher->update(nullptr, {}, {current});
   }

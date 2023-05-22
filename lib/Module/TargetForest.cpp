@@ -622,3 +622,10 @@ void TargetForest::Layer::collectHowManyEventsInTracesWereReached(
                                                    reachedCurrent, total);
   }
 }
+
+confidence::ty TargetForest::getConfidence() const {
+  const auto &it = forest->forest.begin();
+  if (it == forest->forest.end())
+    return confidence::MaxConfidence;
+  return it->second->getConfidence(confidence::MaxConfidence);
+}

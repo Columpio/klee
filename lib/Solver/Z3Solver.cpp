@@ -373,6 +373,8 @@ bool Z3SolverImpl::internalRunSolver(
       expr_to_track;
   std::unordered_set<Z3ASTHandle, Z3ASTHandleHash, Z3ASTHandleCmp> exprs;
 
+  llvm::errs() << "Z3 constraints size: " << query.constraints.size() << '\n';
+
   for (auto const &constraint : query.constraints) {
     Z3ASTHandle z3Constraint = builder->construct(constraint);
     if (ProduceUnsatCore && validityCore) {

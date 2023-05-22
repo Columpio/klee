@@ -113,6 +113,7 @@ typedef unsigned TypeSize;
 #include <sys/mman.h>
 #include <utility>
 #include <vector>
+#include <chrono>
 
 using namespace llvm;
 using namespace klee;
@@ -1043,8 +1044,9 @@ ref<Expr> Executor::maxStaticPctChecks(ExecutionState &current,
   return condition;
 }
 
-Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
-                                   bool isInternal, BranchType reason) {
+Executor::StatePair Executor::fork1(ExecutionState &current,
+                                    ref<Expr> condition, bool isInternal,
+                                    BranchType reason) {
   std::map<ExecutionState *, std::vector<SeedInfo>>::iterator it =
       seedMap.find(&current);
   bool isSeeding = it != seedMap.end();
@@ -1269,6 +1271,16 @@ Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
 
     return StatePair(trueState, falseState);
   }
+}
+
+Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
+                                   bool isInternal, BranchType reason) {
+  auto sp = fork1(current, condition, isInternal, reason);
+  auto f = sp.first;
+  auto s = sp.second;
+  llvm::errs() << "forked " << current.id << " into " << (f ? f->id : 0) << ' '
+               << (s ? s->id : 0) << '\n';
+  return sp;
 }
 
 void Executor::addConstraint(ExecutionState &state, ref<Expr> condition) {
@@ -2018,6 +2030,12 @@ void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
       transferToBasicBlock(ii->getNormalDest(), i->getParent(), state);
     }
   } else {
+    if (f) {
+      llvm::errs() << "Calling " << f->getName() << " on state " << state.id;
+      for (auto &arg : arguments)
+        llvm::errs() << " " << arg->toString();
+      llvm::errs() << "\n";
+    }
     // Check if maximum stack size was reached.
     // We currently only count the number of stack frames
     if (RuntimeMaxStackFrames && state.stack.size() > RuntimeMaxStackFrames) {
@@ -2250,6 +2268,19 @@ void Executor::checkNullCheckAfterDeref(ref<Expr> cond, ExecutionState &state,
 
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
+  if (ki->parent->parent->getName() == "strcmp" ||
+      (ki->info->file.substr(0, 5) != "libc/" &&
+       ki->info->file.substr(0, 8) != "runtime/")) {
+    Statistic *S = theStatisticManager->getStatisticByName("Instructions");
+    int64_t instructions = S ? S->getValue() : 0;
+    llvm::errs()
+      << "i " << instructions << "; "
+      << "s " << state.id << "; "
+      << "t " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << "; "
+      << ki->getSourceLocation() << "$";
+    i->print(llvm::errs());
+    llvm::errs() << '\n';
+  }
 
   if (guidanceKind == GuidanceKind::ErrorGuidance &&
       state.prevPC->inst->isTerminator()) {
@@ -3916,10 +3947,15 @@ bool Executor::decreaseConfidenceFromStoppedStates(
     SetOfStates &left_states, HaltExecution::Reason reason) {
   bool hasStateWhichCanReachSomeTarget = false;
   for (auto state : left_states) {
-    if (state->targetForest.empty())
+    if (state->targetForest.empty()) {
+      // llvm::errs() << "State without targetForest: " << state->id << '\n';
       continue;
+    }
     hasStateWhichCanReachSomeTarget = true;
     auto realReason = reason ? reason : state->terminationReasonType.load();
+    // llvm::errs() << "Has state " << state->id << " with velocity "
+                //  << state->progressVelocity << " and forest:\n";
+    // state->targetForest.dump();
     if (state->progressVelocity >= 0) {
       assert(targets.count(state->targetForest.getEntryFunction()) != 0);
       targets.at(state->targetForest.getEntryFunction())
@@ -4052,7 +4088,9 @@ void Executor::run(std::vector<ExecutionState *> initialStates) {
   }
 
   if (guidanceKind == GuidanceKind::ErrorGuidance) {
+    // llvm::errs() << "PAUSED STATES\n";
     bool canReachNew1 = decreaseConfidenceFromStoppedStates(pausedStates);
+    // llvm::errs() << "JUST STATES\n";
     bool canReachNew2 =
         decreaseConfidenceFromStoppedStates(states, haltExecution);
 
@@ -4253,6 +4291,10 @@ void Executor::terminateState(ExecutionState &state,
   interpreterHandler->incPathsExplored();
 
   state.pc = state.prevPC;
+  // llvm::errs() << "Executor.removedStates.add " << state.id << " because "
+              //  << int(terminationType) << '\n';
+  if (state.id == 6)
+    llvm::errs() << "";
   removedStates.push_back(&state);
 }
 
@@ -4275,6 +4317,8 @@ static std::string terminationTypeFileExtension(StateTerminationType type) {
 
 void Executor::pauseState(ExecutionState &state) {
   pausedStates.insert(&state);
+  if (state.id == 13)
+    llvm::errs() << "";
   searcher->update(nullptr, {}, {&state});
 }
 
@@ -5790,6 +5834,9 @@ void Executor::runFunctionAsMain(Function *f, int argc, char **argv,
       ExecutionState *initialState = state->withStackFrame(caller, kf);
       prepareSymbolicArgs(*initialState, kf);
       prepareTargetedExecution(initialState, whitelist);
+      llvm::errs() << "Starting in " << kf->getName() << " on state "
+                   << initialState->id << '\n';
+      whitelist->dump();
       states.push_back(initialState);
     }
   } else {
