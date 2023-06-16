@@ -6,6 +6,7 @@
 #include "klee/Expr/ExprUtil.h"
 #include "klee/Expr/SymbolicSource.h"
 #include "klee/Expr/Symcrete.h"
+#include "klee/Module/KModule.h"
 #include "klee/Solver/Solver.h"
 
 #include <list>
@@ -34,6 +35,11 @@ IndependentElementSet::IndependentElementSet(ref<Expr> e) {
     // Reads of a constant array don't alias.
     if (re->updates.root->isConstantArray() && !re->updates.head)
       continue;
+
+    if (ref<MockDeterministicSource> mockSource =
+            dyn_cast_or_null<MockDeterministicSource>(array->source)) {
+      uninterpretedFunctions.insert(mockSource->function.getName().str());
+    }
 
     if (!wholeObjects.count(array)) {
       if (ConstantExpr *CE = dyn_cast<ConstantExpr>(re->index)) {
@@ -106,14 +112,15 @@ IndependentElementSet::IndependentElementSet(ref<Symcrete> s) {
 }
 
 IndependentElementSet::IndependentElementSet(const IndependentElementSet &ies)
-    : elements(ies.elements), wholeObjects(ies.wholeObjects), exprs(ies.exprs) {
-}
+    : elements(ies.elements), wholeObjects(ies.wholeObjects), exprs(ies.exprs),
+      uninterpretedFunctions(ies.uninterpretedFunctions) {}
 
 IndependentElementSet &
 IndependentElementSet::operator=(const IndependentElementSet &ies) {
   elements = ies.elements;
   wholeObjects = ies.wholeObjects;
   exprs = ies.exprs;
+  uninterpretedFunctions = ies.uninterpretedFunctions;
   return *this;
 }
 
@@ -171,6 +178,13 @@ bool IndependentElementSet::intersects(const IndependentElementSet &b) {
     if (it2 != b.elements.end()) {
       if (it->second.intersects(it2->second))
         return true;
+    }
+  }
+  for (std::set<std::string>::iterator it = uninterpretedFunctions.begin(),
+                                       ie = uninterpretedFunctions.end();
+       it != ie; ++it) {
+    if (b.uninterpretedFunctions.count(*it)) {
+      return true;
     }
   }
   // No need to check symcretes here, arrays must be sufficient.

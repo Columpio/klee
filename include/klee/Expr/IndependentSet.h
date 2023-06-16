@@ -86,6 +86,7 @@ public:
   constraints_ty exprs; // All expressions (constraints) that are associated
                         // with this factor
   SymcreteOrderedSet symcretes; // All symcretes associated with this factor
+  std::set<std::string> uninterpretedFunctions;
 
   IndependentElementSet();
   IndependentElementSet(ref<Expr> e);
