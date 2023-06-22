@@ -35,7 +35,9 @@ struct DistanceResult {
 
   explicit DistanceResult(WeightResult result_, weight_type weight_ = 0,
                           bool isInsideFunction_ = true)
-      : result(result_), weight(weight_), isInsideFunction(isInsideFunction_) {}
+      : result(result_), weight(weight_), isInsideFunction(isInsideFunction_) {};
+
+  weight_type getUniformWeight() const;
 };
 
 class DistanceCalculator {

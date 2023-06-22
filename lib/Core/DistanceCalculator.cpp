@@ -13,8 +13,22 @@
 #include "klee/Module/KInstruction.h"
 #include "klee/Module/Target.h"
 
+#include <limits>
+
 using namespace llvm;
 using namespace klee;
+
+weight_type DistanceResult::getUniformWeight() const {
+  switch (result) {
+    case Continue:
+      return weight;
+    case Done:
+      return 0;
+    case Miss:
+    default:
+      return std::numeric_limits<weight_type>::max();
+  }
+}
 
 DistanceResult DistanceCalculator::getDistance(ExecutionState &es,
                                                ref<Target> target) {

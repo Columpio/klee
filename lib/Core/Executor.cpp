@@ -4064,6 +4064,35 @@ void Executor::seed(ExecutionState &initialState) {
   }
 }
 
+void Executor::reportProgressTowardsTargets(std::string prefix, const SetOfStates &states) const {
+  klee_message("%zu %sstates remaining", states.size(), prefix.c_str());
+  TargetHashMap<unsigned> distancesTowardsTargets;
+  for (auto &state : states) {
+    for (auto &p : *state->targetForest.getTargets()) {
+      auto target = p.first;
+      auto distance = distanceCalculator->getDistance(*state, target).getUniformWeight();
+      auto it = distancesTowardsTargets.find(target);
+      if (it == distancesTowardsTargets.end())
+        distancesTowardsTargets.insert(it, std::make_pair(target, distance));
+      else {
+        distance = std::min(distance, it->second);
+        distancesTowardsTargets[target] = distance;
+      }
+    }
+  }
+  klee_message("Distances from nearest %sstates to remaining targets:", prefix.c_str());
+  for (auto &p : distancesTowardsTargets) {
+    auto target = p.first;
+    auto distance = p.second;
+    klee_message("%u for %s", distance, target->toString().c_str());
+  }
+}
+
+void Executor::reportProgressTowardsTargets() const {
+  reportProgressTowardsTargets("paused ", pausedStates);
+  reportProgressTowardsTargets("", states);
+}
+
 void Executor::run(std::vector<ExecutionState *> initialStates) {
   // Delay init till now so that ticks don't accrue during optimization and
   // such.
@@ -4102,6 +4131,7 @@ void Executor::run(std::vector<ExecutionState *> initialStates) {
   }
 
   if (guidanceKind == GuidanceKind::ErrorGuidance) {
+    reportProgressTowardsTargets();
     bool canReachNew1 = decreaseConfidenceFromStoppedStates(pausedStates);
     bool canReachNew2 =
         decreaseConfidenceFromStoppedStates(states, haltExecution);
