@@ -338,6 +338,8 @@ bool ConcretizingSolver::relaxSymcreteConstraints(const Query &query,
 
 bool ConcretizingSolver::computeValidity(const Query &query,
                                          PartialValidity &result) {
+  llvm::errs() << "ConcretizingSolver::computeValidity:\n";
+  query.dump();
   if (!query.containsSymcretes()) {
     return solver->impl->computeValidity(query, result);
   }

@@ -424,6 +424,8 @@ private:
   /// Fork current and return states in which condition holds / does
   /// not hold, respectively. One of the states is necessarily the
   /// current state, and one of the states may be null.
+  StatePair fork1(ExecutionState &current, ref<Expr> condition, bool isInternal,
+                  BranchType reason);
   StatePair fork(ExecutionState &current, ref<Expr> condition, bool isInternal,
                  BranchType reason);
 

@@ -674,6 +674,8 @@ bool Z3SolverImpl::check(const ConstraintQuery &query,
   bool hasSolution = false;
   bool status =
       internalRunSolver(query, env, &values, &validityCore, hasSolution);
+  if (status && hasSolution)
+    llvm::errs() << "assignment: " << env.objects.v.size() << " " << values.size() << "\n";
   if (status) {
     result = hasSolution
                  ? (SolverResponse *)new InvalidResponse(env.objects.v, values)
@@ -725,6 +727,8 @@ bool Z3SolverImpl::internalRunSolver(
   ConstantArrayFinder constant_arrays_in_query;
   std::unordered_set<Z3ASTHandle, Z3ASTHandleHash, Z3ASTHandleCmp> exprs;
 
+  llvm::errs() << "Z3 constraints size: " << query.constraints.cs().size() << '\n';
+
   unsigned id = 0;
   std::string freshName = "freshName";
   for (auto const &constraint : query.constraints.v) {
@@ -735,6 +739,9 @@ bool Z3SolverImpl::internalRunSolver(
       env.z3_ast_expr_to_klee_expr.insert({p, constraint});
       env.z3_ast_expr_constraints.v.push_back(p);
       env.expr_to_track[z3Constraint] = p;
+      llvm::errs() << "encoded:\n";
+      llvm::errs() << constraint->toString() << "\n";
+      z3Constraint.dump();
     }
 
     Z3_goal_assert(builder->ctx, goal, z3Constraint);
@@ -794,10 +801,12 @@ bool Z3SolverImpl::internalRunSolver(
   for (auto constraint : query.constraints.v) {
     std::vector<ref<ReadExpr>> reads;
     findReads(constraint, true, reads);
+    // llvm::errs() << "findReads of " << constraint->toString() << "\n";
     for (auto readExpr : reads) {
       const Array *readFromArray = readExpr->updates.root;
       assert(readFromArray);
       env.usedArrayBytes[readFromArray].insert(readExpr->index);
+      // llvm::errs() << (readFromArray->getIdentifier() == "lia12") << " read in constraint: " << readExpr->toString() << "\n";
     }
   }
 
@@ -885,6 +894,7 @@ SolverImpl::SolverRunStatus Z3SolverImpl::handleSolverResponse(
     ::Z3_model theModel = Z3_solver_get_model(builder->ctx, theSolver);
     assert(theModel && "Failed to retrieve model");
     Z3_model_inc_ref(builder->ctx, theModel);
+    llvm::errs() << "Z3 model:\n" << Z3_model_to_string(builder->ctx, theModel) << "\n";
     values->reserve(env.objects.v.size());
     for (auto array : env.objects.v) {
       SparseStorage<unsigned char> data;
@@ -948,6 +958,17 @@ SolverImpl::SolverRunStatus Z3SolverImpl::handleSolverResponse(
       }
 
       Z3_dec_ref(builder->ctx, arraySizeExpr);
+      if (array->getIdentifier() == "lia12") {
+        llvm::errs() << "usedArrayBytes.count(array) = " << env.usedArrayBytes.count(array) << "\n";
+        bool allZero = true;
+        for (int j = 0, k = data.size(); j < k; ++j) {
+          if ((int)data.load(j) != 0) {
+            allZero = false;
+            break;
+          }
+        }
+        assert(!allZero);
+      }
       values->push_back(data);
     }
 
@@ -1067,6 +1088,7 @@ struct ConstraintDistance {
 
 class Z3IncNativeSolver {
 private:
+public: //TODO: debug
   Z3_solver nativeSolver = nullptr;
   Z3_context ctx;
   Z3_params solverParameters;
@@ -1314,10 +1336,10 @@ bool Z3TreeSolverImpl::check(const Query &q,
   findSuitableSolver(query, delta);
   llvm::errs() << "Z3TreeSolverImpl::check current solver:\n";
   currentSolver->dump();
-  if (currentSolver->nativeSolver) {
-    auto s = Z3_solver_to_string(currentSolver->ctx, currentSolver->nativeSolver);
-    llvm::errs() << "Z3 inner solver:\n" << s << "\n";
-  }
+  // if (currentSolver->nativeSolver) {
+  //   auto s = Z3_solver_to_string(currentSolver->ctx, currentSolver->nativeSolver);
+  //   llvm::errs() << "Z3 inner solver:\n" << s << "\n";
+  // }
   llvm::errs() << "Z3TreeSolverImpl::check current delta:\n";
   delta.dump();
   auto ok = check(delta, result);

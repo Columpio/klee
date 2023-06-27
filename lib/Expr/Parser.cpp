@@ -484,11 +484,11 @@ SourceResult ParserImpl::ParseSource() {
     source = ParseSymbolicSizeConstantAddressSource();
   } else if (type == "makeSymbolic") {
     source = ParseMakeSymbolicSource();
-  } else if (type == "lazyInitializationContent") {
+  } else if (type == "lic") {
     source = ParseLazyInitializationContentSource();
-  } else if (type == "lazyInitializationAddress") {
+  } else if (type == "lia") {
     source = ParseLazyInitializationAddressSource();
-  } else if (type == "lazyInitializationSize") {
+  } else if (type == "lis") {
     source = ParseLazyInitializationSizeSource();
   } else if (type == "instruction") {
     assert(km);

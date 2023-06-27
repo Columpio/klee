@@ -202,6 +202,8 @@ bool TargetedSearcher::updateCheckCanReach(
       break;
     case Miss:
       current->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << current->id << " 2\n";
       states->remove(current);
       break;
     }
@@ -221,6 +223,8 @@ bool TargetedSearcher::updateCheckCanReach(
       break;
     case Miss:
       state->targetForest.remove(target);
+      llvm::errs() << "Removing target " << target->toString() << " from state "
+                   << state->id << " 3\n";
       break;
     }
   }
@@ -239,6 +243,8 @@ bool TargetedSearcher::updateCheckCanReach(
         break;
       case Miss:
         state->targetForest.remove(target);
+        llvm::errs() << "Removing target " << target->toString()
+                     << " from state " << state->id << " 4\n";
         states->remove(state);
         break;
       case Continue:
@@ -273,6 +279,17 @@ void TargetedSearcher::removeReached() {
   for (auto state : reachedOnLastUpdate) {
     states->remove(state);
     state->targetForest.stepTo(target);
+    size_t ml = 0;
+    for (auto l : state->multilevel)
+      ml += state->multilevel.count(l);
+    llvm::errs() << "REACHed target " << target->toString() << '\n';
+    llvm::errs() << "state depth: " << state->depth
+                 << "; state steppedInstructions: " << state->steppedInstructions
+                 << "; state multiLevel count (= blocks): " << ml
+                 << "; global forks: " << stats::forks
+                 << "; global solver time: " << stats::solverTime
+                 << '\n';
+    // state->targetForest.dump();
   }
   reachedOnLastUpdate.clear();
 }

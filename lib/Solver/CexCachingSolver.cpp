@@ -279,6 +279,8 @@ CexCachingSolver::~CexCachingSolver() {
 
 bool CexCachingSolver::computeValidity(const Query &query,
                                        PartialValidity &result) {
+  llvm::errs() << "CexCachingSolver::computeValidity:\n";
+  query.dump();
   TimerStatIncrementer t(stats::cexCacheTime);
   ref<SolverResponse> a;
   ref<Expr> q;
@@ -327,6 +329,8 @@ bool CexCachingSolver::computeTruth(const Query &query, bool &isValid) {
 }
 
 bool CexCachingSolver::computeValue(const Query &query, ref<Expr> &result) {
+  llvm::errs() << "CexCachingSolver::computeValue:\n";
+  query.dump();
   TimerStatIncrementer t(stats::cexCacheTime);
 
   ref<SolverResponse> a;
@@ -383,8 +387,13 @@ bool CexCachingSolver::computeInitialValues(
 }
 
 bool CexCachingSolver::check(const Query &query, ref<SolverResponse> &result) {
+  llvm::errs() << "CexCachingSolver::check:\n";
+  query.dump();
   TimerStatIncrementer t(stats::cexCacheTime);
-  return getResponse(query, result);
+  bool ok = getResponse(query, result);
+  llvm::errs() << "CexCachingSolver::check result:\n";
+  result->dump();
+  return ok;
 }
 
 bool CexCachingSolver::computeValidityCore(const Query &query,

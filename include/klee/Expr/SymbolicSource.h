@@ -222,7 +222,7 @@ public:
       : LazyInitializationSource(pointer) {}
   Kind getKind() const override { return Kind::LazyInitializationAddress; }
   virtual std::string getName() const override {
-    return "lazyInitializationAddress";
+    return "lia";
   }
 
   static bool classof(const SymbolicSource *S) {
@@ -237,7 +237,7 @@ public:
       : LazyInitializationSource(pointer) {}
   Kind getKind() const override { return Kind::LazyInitializationSize; }
   virtual std::string getName() const override {
-    return "lazyInitializationSize";
+    return "lis";
   }
 
   static bool classof(const SymbolicSource *S) {
@@ -252,7 +252,7 @@ public:
       : LazyInitializationSource(pointer) {}
   Kind getKind() const override { return Kind::LazyInitializationContent; }
   virtual std::string getName() const override {
-    return "lazyInitializationContent";
+    return "lic";
   }
 
   static bool classof(const SymbolicSource *S) {

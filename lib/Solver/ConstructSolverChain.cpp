@@ -68,7 +68,7 @@ Solver *constructSolverChain(Solver *coreSolver, std::string querySMT2LogPath,
                                       addressGenerator);
 
   if (DebugValidateSolver)
-    solver = createValidatingSolver(solver, coreSolver);
+    solver = createValidatingSolver(solver, klee::createCoreSolver(Z3_SOLVER));
 
   if (QueryLoggingOptions.isSet(ALL_KQUERY)) {
     solver = createKQueryLoggingSolver(solver, queryKQueryLogPath,

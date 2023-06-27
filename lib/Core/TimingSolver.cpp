@@ -29,6 +29,7 @@ bool TimingSolver::evaluate(const ConstraintSet &constraints, ref<Expr> expr,
                             PartialValidity &result,
                             SolverQueryMetaData &metaData,
                             bool produceValidityCore) {
+  llvm::errs() << "TimingSolver: query: " << expr->toString() << "\n";
   // Fast path, to avoid timer and OS overhead.
   if (ConstantExpr *CE = dyn_cast<ConstantExpr>(expr)) {
     result = CE->isTrue() ? PValidity::MustBeTrue : PValidity::MustBeFalse;
@@ -43,6 +44,7 @@ bool TimingSolver::evaluate(const ConstraintSet &constraints, ref<Expr> expr,
   ref<SolverResponse> queryResult;
   ref<SolverResponse> negatedQueryResult;
 
+  llvm::errs() << "TimingSolver: to underlying solver query: " << expr->toString() << "\n";
   bool success = produceValidityCore
                      ? solver->evaluate(Query(constraints, expr), queryResult,
                                         negatedQueryResult)

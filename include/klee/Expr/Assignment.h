@@ -76,7 +76,9 @@ class AssignmentEvaluator : public ExprEvaluator {
 
 protected:
   ref<Expr> getInitialValue(const Array &mo, unsigned index) {
-    return a.evaluate(&mo, index);
+    auto res = a.evaluate(&mo, index);
+    llvm::errs() << "AssignmentEvaluator::getInitialValue: " << mo.getName() << "(" << mo.getIdentifier() << ")[" << index << "] ~> " << res->toString() << "\n";
+    return res;
   }
 
 public:

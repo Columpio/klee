@@ -170,6 +170,8 @@ void CachingSolver::validityCoreCacheInsert(const Query &query,
 
 bool CachingSolver::computeValidity(const Query &query,
                                     PartialValidity &result) {
+  llvm::errs() << "CachingSolver::computeValidity:\n";
+  query.dump();
   PartialValidity cachedResult;
   bool tmp, cacheHit = cacheLookup(query, cachedResult);
 
@@ -332,6 +334,8 @@ bool CachingSolver::computeInitialValues(
 }
 
 bool CachingSolver::check(const Query &query, ref<SolverResponse> &result) {
+  llvm::errs() << "CachingSolver::check:\n";
+  query.dump();
   PartialValidity cachedResult;
   bool tmp, cacheHit = cacheLookup(query, cachedResult);
 

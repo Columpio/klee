@@ -57,6 +57,8 @@ public:
 
 bool IndependentSolver::computeValidity(const Query &query,
                                         PartialValidity &result) {
+  llvm::errs() << "IndependentSolver::computeValidity:\n";
+  query.dump();
   constraints_ty required;
   IndependentElementSet eltsClosure =
       getIndependentConstraints(query, required);
@@ -102,16 +104,25 @@ bool assertCreatedPointEvaluatesToTrue(
   // The semantics of std::map should be to not insert a (key, value)
   // pair if it already exists so we should continue to use the assignment
   // from ``objects`` and ``values``.
+
+  llvm::errs() << "Assignment before before check:\n";
+  assign.dump();
+
   if (retMap.size() > 0)
     assign.bindings.insert(retMap.begin(), retMap.end());
 
+  llvm::errs() << "Assignment before check:\n";
+  assign.dump();
+
   for (auto const &constraint : query.constraints.cs()) {
     ref<Expr> ret = assign.evaluate(constraint);
+    llvm::errs() << constraint->toString() << " evaluated to " << ret->toString() << "\n";
 
     assert(isa<ConstantExpr>(ret) &&
            "assignment evaluation did not result in constant");
     ref<ConstantExpr> evaluatedConstraint = dyn_cast<ConstantExpr>(ret);
     if (evaluatedConstraint->isFalse()) {
+      assert(false);
       return false;
     }
   }
@@ -119,7 +130,9 @@ bool assertCreatedPointEvaluatesToTrue(
   ref<Expr> q = assign.evaluate(neg);
   assert(isa<ConstantExpr>(q) &&
          "assignment evaluation did not result in constant");
-  return cast<ConstantExpr>(q)->isTrue();
+  bool ok = cast<ConstantExpr>(q)->isTrue();
+  assert(ok);
+  return ok;
 }
 
 bool assertCreatedPointEvaluatesToTrue(
@@ -134,7 +147,11 @@ bool assertCreatedPointEvaluatesToTrue(
     objects.push_back(ovp.first);
     values.push_back(ovp.second);
   }
-  return assertCreatedPointEvaluatesToTrue(query, objects, values, retMap);
+  llvm::errs() << "assertCreatedPointEvaluatesToTrue started with\n";
+  query.dump();
+  bool ok = assertCreatedPointEvaluatesToTrue(query, objects, values, retMap);
+  llvm::errs() << "assertCreatedPointEvaluatesToTrue finished with " << ok << "\n";
+  return ok;
 }
 
 bool IndependentSolver::computeInitialValues(
@@ -224,6 +241,8 @@ bool IndependentSolver::computeInitialValues(
 }
 
 bool IndependentSolver::check(const Query &query, ref<SolverResponse> &result) {
+  llvm::errs() << "IndependentSolver::check:\n";
+  query.dump();
   // We assume the query has a solution except proven differently
   // This is important in case we don't have any constraints but
   // we need initial values for requested array objects.
