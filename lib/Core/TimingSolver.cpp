@@ -340,3 +340,7 @@ TimingSolver::getRange(const ConstraintSet &constraints, ref<Expr> expr,
   metaData.queryCost += timer.delta();
   return result;
 }
+
+void TimingSolver::notifyStateTermination(std::uint32_t id) {
+  solver->notifyStateTermination(id);
+}

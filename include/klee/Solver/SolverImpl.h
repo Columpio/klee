@@ -22,7 +22,7 @@ class ExecutionState;
 class Expr;
 struct Query;
 
-/// SolverImpl - Abstract base clase for solver implementations.
+/// SolverImpl - Abstract base class for solver implementations.
 class SolverImpl {
   // DO NOT IMPLEMENT.
   SolverImpl(const SolverImpl &);
@@ -119,6 +119,8 @@ public:
   }
 
   virtual void setCoreSolverTimeout(time::Span timeout){};
+
+  virtual void notifyStateTermination(std::uint32_t id){};
 };
 
 } // namespace klee

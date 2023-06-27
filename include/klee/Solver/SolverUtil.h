@@ -41,6 +41,9 @@ enum class Validity { True = 1, False = -1, Unknown = 0 };
 struct SolverQueryMetaData {
   /// @brief Costs for all queries issued for this state
   time::Span queryCost;
+
+  /// @brief Caller state id
+  std::uint32_t id = 0;
 };
 
 struct Query {

@@ -22,7 +22,14 @@
 
 namespace klee {
 
+Solver *createZ3Solver(bool isTreeSolver, Z3BuilderType type) {
+  if (isTreeSolver && MaxSolversApproxTreeInc > 1)
+    return new Z3TreeSolver(type, MaxSolversApproxTreeInc);
+  return new Z3Solver(type);
+}
+
 Solver *createCoreSolver(CoreSolverType cst) {
+  bool isTreeSolver = false;
   switch (cst) {
   case STP_SOLVER:
 #ifdef ENABLE_STP
@@ -53,15 +60,17 @@ Solver *createCoreSolver(CoreSolverType cst) {
 #endif
   case DUMMY_SOLVER:
     return createDummySolver();
+  case Z3_TREE_SOLVER:
+    isTreeSolver = true;
   case Z3_SOLVER:
 #ifdef ENABLE_Z3
     klee_message("Using Z3 solver backend");
 #ifdef ENABLE_FP
     klee_message("Using Z3 bitvector builder");
-    return new Z3Solver(KLEE_BITVECTOR);
+    return createZ3Solver(isTreeSolver, KLEE_BITVECTOR);
 #else
     klee_message("Using Z3 core builder");
-    return new Z3Solver(KLEE_CORE);
+    return createZ3Solver(isTreeSolver, KLEE_CORE);
 #endif
 #else
     klee_message("Not compiled with Z3 support");

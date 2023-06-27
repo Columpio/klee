@@ -159,6 +159,10 @@ bool Solver::check(const Query &query, ref<SolverResponse> &queryResult) {
   return impl->check(query, queryResult);
 }
 
+void Solver::notifyStateTermination(std::uint32_t id) {
+  impl->notifyStateTermination(id);
+}
+
 static std::pair<ref<ConstantExpr>, ref<ConstantExpr>> getDefaultRange() {
   return std::make_pair(ConstantExpr::create(0, 64),
                         ConstantExpr::create(0, 64));
@@ -322,6 +326,14 @@ bool Query::containsSizeSymcretes() const {
     }
   }
   return false;
+}
+
+void klee::findSymbolicObjects(const Query &query,
+                               std::vector<const Array *> &results) {
+  ExprHashSet expressions;
+  expressions.insert(query.constraints.cs().begin(), query.constraints.cs().end());
+  expressions.insert(query.expr);
+  findSymbolicObjects(expressions.begin(), expressions.end(), results);
 }
 
 void Query::dump() const {

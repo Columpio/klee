@@ -281,17 +281,9 @@ bool CexCachingSolver::computeValidity(const Query &query,
                                        PartialValidity &result) {
   TimerStatIncrementer t(stats::cexCacheTime);
   ref<SolverResponse> a;
-  if (!getResponse(query.withFalse(), a))
+  ref<Expr> q;
+  if (!computeValue(query, q))
     return false;
-  assert(isa<InvalidResponse>(a) && "computeValidity() must have assignment");
-
-  ref<Expr> q = cast<InvalidResponse>(a)->evaluate(query.expr);
-
-  if (!isa<ConstantExpr>(q) && solver->impl->computeValue(query, q))
-    return false;
-
-  assert(isa<ConstantExpr>(q) &&
-         "assignment evaluation did not result in constant");
 
   if (cast<ConstantExpr>(q)->isTrue()) {
     if (!getResponse(query, a))
@@ -338,10 +330,13 @@ bool CexCachingSolver::computeValue(const Query &query, ref<Expr> &result) {
   TimerStatIncrementer t(stats::cexCacheTime);
 
   ref<SolverResponse> a;
-  if (!getResponse(query.withFalse(), a))
-    return false;
-  assert(isa<InvalidResponse>(a) && "computeValue() must have assignment");
-  result = cast<InvalidResponse>(a)->evaluate(query.expr);
+  result = ConstantExpr::create(1, query.expr->getWidth());
+  if (!query.constraints.cs().empty()) {
+    if (!getResponse(query.withFalse(), a))
+      return false;
+    assert(isa<InvalidResponse>(a) && "computeValue() must have assignment");
+    result = cast<InvalidResponse>(a)->evaluate(query.expr);
+  }
 
   if (!isa<ConstantExpr>(result) && solver->impl->computeValue(query, result))
     return false;

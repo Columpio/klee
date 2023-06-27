@@ -119,7 +119,9 @@ ExecutionState::ExecutionState(const ExecutionState &state)
                                ? state.unwindingInformation->clone()
                                : nullptr),
       coveredNew(state.coveredNew), forkDisabled(state.forkDisabled),
-      returnValue(state.returnValue), gepExprBases(state.gepExprBases) {}
+      returnValue(state.returnValue), gepExprBases(state.gepExprBases) {
+  queryMetaData.id = state.id;
+  }
 
 ExecutionState *ExecutionState::branch() {
   depth++;

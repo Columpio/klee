@@ -119,6 +119,13 @@ cl::opt<bool> UseAssignmentValidatingSolver(
     cl::desc("Debug the correctness of generated assignments (default=false)"),
     cl::cat(SolvingCat));
 
+cl::opt<unsigned> MaxSolversApproxTreeInc(
+    "max-solvers-approx-tree-inc",
+    cl::desc(
+        "Maximum size of the Z3 solver pool for approximating tree incrementality."
+        " Set to 0 to disable (default=0)"),
+    cl::init(0), cl::cat(SolvingCat));
+
 void KCommandLine::HideOptions(llvm::cl::OptionCategory &Category) {
   StringMap<cl::Option *> &map = cl::getRegisteredOptions();
 
@@ -201,7 +208,8 @@ cl::opt<CoreSolverType> CoreSolverToUse(
                clEnumValN(METASMT_SOLVER, "metasmt",
                           "metaSMT" METASMT_IS_DEFAULT_STR),
                clEnumValN(DUMMY_SOLVER, "dummy", "Dummy solver"),
-               clEnumValN(Z3_SOLVER, "z3", "Z3" Z3_IS_DEFAULT_STR)),
+               clEnumValN(Z3_SOLVER, "z3", "Z3" Z3_IS_DEFAULT_STR),
+               clEnumValN(Z3_TREE_SOLVER, "z3-tree", "Z3 tree-incremental solver")),
     cl::init(DEFAULT_CORE_SOLVER), cl::cat(SolvingCat));
 
 cl::opt<CoreSolverType> DebugCrossCheckCoreSolverWith(

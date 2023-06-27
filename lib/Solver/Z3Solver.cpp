@@ -13,6 +13,10 @@
 #include "klee/Support/OptionCategories.h"
 
 #include <csignal>
+#include <deque>
+#include <cassert>
+#include <unordered_map>
+#include <numeric>
 
 #ifdef ENABLE_Z3
 
@@ -29,8 +33,6 @@
 #include "klee/Solver/SolverImpl.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include <unordered_map>
 
 namespace {
 // NOTE: Very useful for debugging Z3 behaviour. These files can be given to
@@ -62,22 +64,307 @@ llvm::cl::opt<unsigned>
 
 namespace klee {
 
-class Z3SolverImpl : public SolverImpl {
+typedef std::unordered_set<size_t> FrameIds;
+
+template<typename _Tp, typename _Alloc>
+void extend(std::vector<_Tp, _Alloc> &ths, const std::vector<_Tp, _Alloc> &other) {
+  ths.reserve(ths.size() + other.size());
+  ths.insert(ths.end(), other.begin(), other.end());
+}
+
+template<typename _Tp, typename _Alloc = std::allocator<_Tp> >
+class inc_vector;
+typedef inc_vector<ref<Expr>> ConstraintFrames;
+
+template<typename _Tp, typename _Alloc>
+class inc_vector {
+friend void dump(const ConstraintFrames &);
+public:
+  /// It is public, so that all vector operations are supported
+  /// Everything pushed to v is pushed to the last frame
+  std::vector<_Tp, _Alloc> v;
+
+  using iterator = std::vector<size_t>::const_iterator;
 private:
+  std::vector<size_t> frame_sizes;
+  // v.size() == sum(frame_sizes) + size of the fresh frame
+
+  size_t freshFrameSize() const {
+    return v.size() - std::accumulate(frame_sizes.begin(), frame_sizes.end(), 0);
+  }
+
+  void take(size_t n, size_t &frames_count, size_t &frame_index) const {
+    size_t i = 0;
+    size_t c = n;
+    for (; i < frame_sizes.size() ; i++) {
+      if (frame_sizes[i] > c)
+        break;
+      c -= frame_sizes[i];
+    }
+    frames_count = c;
+    frame_index = i;
+  }
+
+public:
+  inc_vector() {}
+  inc_vector(const std::vector<_Tp> &constraints)
+  : v(constraints) {}
+
+  iterator begin() const { return frame_sizes.cbegin(); }
+  iterator end() const { return frame_sizes.cend(); }
+
+  void pop(size_t popFrames) {
+    assert(freshFrameSize() == 0);
+    size_t toPop = std::accumulate(frame_sizes.end() - popFrames, frame_sizes.end(), 0);
+    v.resize(v.size() - toPop);
+    frame_sizes.resize(frame_sizes.size() - popFrames);
+  }
+
+  void push() {
+    auto freshSize = freshFrameSize();
+    frame_sizes.push_back(freshSize);
+    assert(freshFrameSize() == 0);
+  }
+
+  /// ensures that last frame is empty
+  void extend(const std::vector<_Tp, _Alloc> &other) {
+    assert(freshFrameSize() == 0);
+    // push();
+    klee::extend(v, other);
+    push();
+  }
+
+  void takeAfter(size_t n, inc_vector<_Tp, _Alloc> &result) const {
+    size_t frames_count, frame_index;
+    take(n, frames_count, frame_index);
+    result = *this;
+    std::vector<_Tp, _Alloc>(result.v.begin() + n, result.v.end()).swap(result.v);
+    std::vector<size_t>(result.frame_sizes.begin() + frame_index, result.frame_sizes.end()).swap(result.frame_sizes);
+    if (frames_count)
+      result.frame_sizes[0] -= frames_count;
+  }
+
+  void takeBefore(size_t n, size_t &toPop, size_t &takeFromOther) const {
+    take(n, takeFromOther, toPop);
+    toPop = frame_sizes.size() - toPop;
+  }
+};
+
+void dump(const ConstraintFrames &frames) {
+  llvm::errs() << "frame sizes:";
+  for (auto size : frames.frame_sizes) {
+    llvm::errs() << " " << size;
+  }
+  llvm::errs() << "\n";
+  llvm::errs() << "frames:\n";
+  for (auto &x : frames.v) {
+    llvm::errs() << x->toString() << "\n";
+  }
+}
+
+template<typename _Value,
+    typename _Hash = std::hash<_Value>,
+    typename _Pred = std::equal_to<_Value>,
+    typename _Alloc = std::allocator<_Value>>
+class inc_uset {
+private:
+  using setT = std::unordered_set<_Value, _Hash, _Pred, _Alloc>;
+  using citerator = typename setT::const_iterator;
+  using idMap = std::unordered_map<_Value, FrameIds, _Hash, _Pred, _Alloc>;
+  setT set;
+  idMap ids;
+  size_t current_frame;
+
+public:
+  citerator cbegin() const { return set.cbegin(); }
+  citerator cend() const { return set.cend(); }
+
+  void insert(const _Value &v) {
+    set.insert(v);
+    ids[v].insert(current_frame);
+  }
+
+  void pop(size_t popFrames) {
+    current_frame -= popFrames;
+    idMap newIdMap;
+    for (auto &keyAndIds : ids) {
+      FrameIds newIds;
+      for (auto id : keyAndIds.second)
+        if (id <= current_frame)
+          newIds.insert(id);
+      if (newIds.empty())
+        set.erase(keyAndIds.first);
+      else
+        newIdMap.insert(std::make_pair(keyAndIds.first, newIds));
+    }
+    ids = newIdMap;
+  }
+
+  void push() {
+    current_frame++;
+  }
+};
+
+template<typename _Key, typename _Tp,
+    typename _Hash = std::hash<_Key>,
+    typename _Pred = std::equal_to<_Key>,
+    typename _Alloc = std::allocator<std::pair<const _Key, _Tp>>>
+class inc_umap {
+private:
+  std::unordered_map<_Key, _Tp, _Hash, _Pred, _Alloc> map;
+  using idMap = std::unordered_map<_Key, FrameIds, _Hash, _Pred, _Alloc>;
+  idMap ids;
+  size_t current_frame = 0;
+
+public:
+  void insert(const std::pair<_Key, _Tp> &pair) {
+    map.insert(pair);
+    ids[pair.first].insert(current_frame);
+  }
+
+  _Tp& operator[](const _Key &key) {
+    ids[key].insert(current_frame);
+    return map[key];
+  }
+
+  size_t count(const _Key &key) const {
+    return map.count(key);
+  }
+
+  const _Tp &at(_Key &key) const {
+    return map.at(key);
+  }
+
+  void pop(size_t popFrames) {
+    current_frame -= popFrames;
+    idMap newIdMap;
+    for (auto &keyAndIds : ids) {
+      FrameIds newIds;
+      for (auto id : keyAndIds.second)
+        if (id <= current_frame)
+          newIds.insert(id);
+      if (newIds.empty())
+        map.erase(keyAndIds.first);
+      else
+        newIdMap.insert(std::make_pair(keyAndIds.first, newIds));
+    }
+    ids = newIdMap;
+  }
+
+  void push() {
+    current_frame++;
+  }
+};
+
+class ConstraintQuery {
+private:
+  // this should be used when only query is needed, se comment below
+  ref<Expr> expr;
+
+public:
+  // KLEE Queries are validity queries i.e.
+  // ∀ X Constraints(X) → query(X)
+  // but Z3 works in terms of satisfiability so instead we ask the
+  // negation of the equivalent i.e.
+  // ∃ X Constraints(X) ∧ ¬ query(X)
+  // so this `constraints` field contains: Constraints(X) ∧ ¬ query(X)
+  ConstraintFrames constraints;
+
+  explicit ConstraintQuery() {}
+
+  ConstraintQuery(ConstraintFrames &frames)
+    : expr(Expr::createIsZero(frames.v.back())), constraints(frames) {}
+
+  ConstraintQuery(const Query &q)
+    : expr(q.expr) {
+      for (auto &constraint : q.constraints.cs()) {
+        constraints.v.push_back(constraint);
+        constraints.push();
+      }
+      if (!q.expr->isFalse())
+        constraints.v.push_back(Expr::createIsZero(q.expr));
+      return;
+    }
+
+  size_t size() const { return constraints.v.size(); }
+
+  ref<Expr> getOriginalQueryExpr() const { return expr; }
+
+  std::vector<const Array *> gatherArrays() const;
+};
+
+std::vector<const Array *> ConstraintQuery::gatherArrays() const {
+  std::vector<const Array *> arrays;
+  findObjects(constraints.v.begin(), constraints.v.end(), arrays);
+  return arrays;
+}
+
+void findSymbolicObjects(const ConstraintQuery &cf,
+                         std::vector<const Array *> &results) {
+  ExprHashSet expressions;
+  expressions.insert(cf.constraints.v.begin(), cf.constraints.v.end());
+  findSymbolicObjects(expressions.begin(), expressions.end(), results);
+}
+
+class Z3SolverEnv {
+public:
+  inc_vector<const Array *> objects;
+  inc_vector<Z3ASTHandle> z3_ast_expr_constraints;
+  inc_umap<Z3ASTHandle, ref<Expr>, Z3ASTHandleHash, Z3ASTHandleCmp>
+      z3_ast_expr_to_klee_expr;
+  inc_umap<Z3ASTHandle, Z3ASTHandle, Z3ASTHandleHash, Z3ASTHandleCmp>
+      expr_to_track;
+  inc_umap<const Array *, ExprHashSet> usedArrayBytes;
+
+  explicit Z3SolverEnv() {};
+  explicit Z3SolverEnv(const std::vector<const Array *> &objects);
+
+  void pop(size_t popSize);
+  void push();
+};
+
+Z3SolverEnv::Z3SolverEnv(const std::vector<const Array *> &objects)
+  : objects(objects) {}
+
+void Z3SolverEnv::pop(size_t popSize) {
+  objects.pop(popSize);
+  z3_ast_expr_constraints.pop(popSize);
+  z3_ast_expr_to_klee_expr.pop(popSize);
+  expr_to_track.pop(popSize);
+  usedArrayBytes.pop(popSize);
+}
+
+void Z3SolverEnv::push() {
+  objects.push();
+  z3_ast_expr_constraints.push();
+  z3_ast_expr_to_klee_expr.push();
+  expr_to_track.push();
+  usedArrayBytes.push();
+}
+
+class Z3SolverImpl : public SolverImpl {
+protected:
   Z3Builder *builder;
+  ::Z3_params solverParameters;
+private:
   Z3BuilderType builderType;
   time::Span timeout;
   SolverRunStatus runStatusCode;
   std::unique_ptr<llvm::raw_fd_ostream> dumpedQueriesFile;
-  ::Z3_params solverParameters;
   // Parameter symbols
   ::Z3_symbol timeoutParamStrSymbol;
   ::Z3_symbol unsatCoreParamStrSymbol;
 
-  bool internalRunSolver(const Query &,
-                         const std::vector<const Array *> *objects,
-                         std::vector<SparseStorage<unsigned char>> *values,
-                         ValidityCore *validityCore, bool &hasSolution);
+public:
+  virtual Z3_solver initNativeZ3(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal) = 0;
+  virtual void deinitNativeZ3(Z3_solver theSolver) = 0;
+
+private:
+  bool internalRunSolver(
+      const ConstraintQuery &query,
+      Z3SolverEnv &env,
+      std::vector<SparseStorage<unsigned char>> *values,
+      ValidityCore *validityCore, bool &hasSolution);
   bool validateZ3Model(::Z3_solver &theSolver, ::Z3_model &theModel);
 
 public:
@@ -110,17 +397,45 @@ public:
                             const std::vector<const Array *> &objects,
                             std::vector<SparseStorage<unsigned char>> &values,
                             bool &hasSolution);
-  bool check(const Query &query, ref<SolverResponse> &result);
+  using SolverImpl::check;
+  bool check(const ConstraintQuery &query,
+    Z3SolverEnv &env,
+    ref<SolverResponse> &result);
   bool computeValidityCore(const Query &query, ValidityCore &validityCore,
                            bool &isValid);
   SolverRunStatus handleSolverResponse(
       ::Z3_solver theSolver, ::Z3_lbool satisfiable,
-      const std::vector<const Array *> *objects,
+      const Z3SolverEnv &env,
       std::vector<SparseStorage<unsigned char>> *values,
-      const std::unordered_map<const Array *, ExprHashSet> &usedArrayBytes,
       bool &hasSolution);
   SolverRunStatus getOperationStatusCode();
 };
+
+Z3_solver createNativeZ3(Z3_context ctx, Z3_params solverParameters, const ConstraintQuery &query, Z3_probe probe, Z3_goal goal) {
+  Z3_solver theSolver = nullptr;
+  std::vector<const Array *> arrays = query.gatherArrays();
+  bool forceTactic = true;
+  for (const Array *array : arrays) {
+    if (isa<SymbolicSizeConstantSource>(array->source)) {
+      forceTactic = false;
+      break;
+    }
+  }
+
+  if (forceTactic && Z3_probe_apply(ctx, probe, goal)) {
+    theSolver = Z3_mk_solver_for_logic(
+        ctx, Z3_mk_string_symbol(ctx, "QF_AUFBV"));
+  } else {
+    theSolver = Z3_mk_solver(ctx);
+  }
+  Z3_solver_inc_ref(ctx, theSolver);
+  Z3_solver_set_params(ctx, theSolver, solverParameters);
+  return theSolver;
+}
+
+void deleteNativeZ3(Z3_context ctx, Z3_solver theSolver) {
+  Z3_solver_dec_ref(ctx, theSolver);
+}
 
 Z3SolverImpl::Z3SolverImpl(Z3BuilderType type)
     : builderType(type), runStatusCode(SOLVER_RUN_STATUS_FAILURE) {
@@ -183,7 +498,51 @@ Z3SolverImpl::~Z3SolverImpl() {
   delete builder;
 }
 
-Z3Solver::Z3Solver(Z3BuilderType type) : Solver(new Z3SolverImpl(type)) {}
+class Z3NonIncSolverImpl : public Z3SolverImpl {
+private:
+  using Z3SolverImpl::check;
+
+public:
+  Z3NonIncSolverImpl(Z3BuilderType type) : Z3SolverImpl(type) {}
+
+  /// implementation of Z3SolverImpl interface
+  Z3_solver initNativeZ3(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal);
+  void deinitNativeZ3(Z3_solver theSolver);
+
+  /// implementation of the SolverImpl interface //TODO: return after refactoring parent
+  // bool computeTruth(const Query &query, bool &isValid);
+  // bool computeValidity(const Query &query, Solver::Validity &result);
+  // bool computeValue(const Query &query, ref<Expr> &result);
+  // bool computeInitialValues(const Query &query,
+  //                           const std::vector<const Array *> &objects,
+  //                           std::vector<SparseStorage<unsigned char>> &values,
+  //                           bool &hasSolution);
+  bool check(const Query &query, ref<SolverResponse> &result);
+  // bool computeValidityCore(const Query &query, ValidityCore &validityCore,
+  //                          bool &isValid);
+  // SolverRunStatus getOperationStatusCode();
+  // void setCoreSolverTimeout(time::Span timeout);
+};
+
+Z3_solver Z3NonIncSolverImpl::initNativeZ3(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal) {
+  return createNativeZ3(builder->ctx, solverParameters, query, probe, goal);
+}
+
+void Z3NonIncSolverImpl::deinitNativeZ3(Z3_solver theSolver) {
+  deleteNativeZ3(builder->ctx, theSolver);
+}
+
+bool Z3NonIncSolverImpl::check(const Query &query, ref<SolverResponse> &result) {
+  Z3SolverEnv env;
+  bool solver_result = check(query, env, result);
+  llvm::errs() << "Z3NonIncSolverImpl::check:\n:";
+  query.dump();
+  llvm::errs() << "Z3NonIncSolverImpl::check result: " << solver_result << " and\n";
+  result->dump();
+  return solver_result;
+}
+
+Z3Solver::Z3Solver(Z3BuilderType type) : Solver(new Z3NonIncSolverImpl(type)) {}
 
 char *Z3Solver::getConstraintLog(const Query &query) {
   return impl->getConstraintLog(query);
@@ -271,8 +630,9 @@ char *Z3SolverImpl::getConstraintLog(const Query &query) {
 }
 
 bool Z3SolverImpl::computeTruth(const Query &query, bool &isValid) {
+  Z3SolverEnv env;
   bool hasSolution = false; // to remove compiler warning
-  bool status = internalRunSolver(query, /*objects=*/NULL, /*values=*/NULL,
+  bool status = internalRunSolver(query, /*env=*/env, /*values=*/NULL,
                                   /*validityCore=*/NULL, hasSolution);
   isValid = !hasSolution;
   return status;
@@ -300,30 +660,23 @@ bool Z3SolverImpl::computeValue(const Query &query, ref<Expr> &result) {
 bool Z3SolverImpl::computeInitialValues(
     const Query &query, const std::vector<const Array *> &objects,
     std::vector<SparseStorage<unsigned char>> &values, bool &hasSolution) {
-  return internalRunSolver(query, &objects, &values, /*validityCore=*/NULL,
+  Z3SolverEnv env(objects);
+  return internalRunSolver(query, env, &values, /*validityCore=*/NULL,
                            hasSolution);
 }
 
-bool Z3SolverImpl::check(const Query &query, ref<SolverResponse> &result) {
-  ExprHashSet expressions;
-  assert(!query.containsSymcretes());
-  expressions.insert(query.constraints.cs().begin(),
-                     query.constraints.cs().end());
-  expressions.insert(query.expr);
-
-  std::vector<const Array *> objects;
-  findSymbolicObjects(expressions.begin(), expressions.end(), objects);
+bool Z3SolverImpl::check(const ConstraintQuery &query,
+  Z3SolverEnv &env,
+  ref<SolverResponse> &result) {
+  findSymbolicObjects(query, env.objects.v);
   std::vector<SparseStorage<unsigned char>> values;
-
   ValidityCore validityCore;
-
   bool hasSolution = false;
-
   bool status =
-      internalRunSolver(query, &objects, &values, &validityCore, hasSolution);
+      internalRunSolver(query, env, &values, &validityCore, hasSolution);
   if (status) {
     result = hasSolution
-                 ? (SolverResponse *)new InvalidResponse(objects, values)
+                 ? (SolverResponse *)new InvalidResponse(env.objects.v, values)
                  : (SolverResponse *)new ValidResponse(validityCore);
   }
   return status;
@@ -332,19 +685,19 @@ bool Z3SolverImpl::check(const Query &query, ref<SolverResponse> &result) {
 bool Z3SolverImpl::computeValidityCore(const Query &query,
                                        ValidityCore &validityCore,
                                        bool &isValid) {
+  Z3SolverEnv env;
   bool hasSolution = false; // to remove compiler warning
-  bool status = internalRunSolver(query, /*objects=*/NULL, /*values=*/NULL,
+  bool status = internalRunSolver(query, /*env=*/env, /*values=*/NULL,
                                   &validityCore, hasSolution);
   isValid = !hasSolution;
   return status;
 }
 
 bool Z3SolverImpl::internalRunSolver(
-    const Query &query, const std::vector<const Array *> *objects,
+    const ConstraintQuery &query,
+    Z3SolverEnv &env,
     std::vector<SparseStorage<unsigned char>> *values,
     ValidityCore *validityCore, bool &hasSolution) {
-
-  assert(!query.containsSymcretes());
 
   if (ProduceUnsatCore && validityCore) {
     enableUnsatCore();
@@ -370,24 +723,18 @@ bool Z3SolverImpl::internalRunSolver(
   runStatusCode = SOLVER_RUN_STATUS_FAILURE;
 
   ConstantArrayFinder constant_arrays_in_query;
-  std::vector<Z3ASTHandle> z3_ast_expr_constraints;
-  std::unordered_map<Z3ASTHandle, ref<Expr>, Z3ASTHandleHash, Z3ASTHandleCmp>
-      z3_ast_expr_to_klee_expr;
-
-  std::unordered_map<Z3ASTHandle, Z3ASTHandle, Z3ASTHandleHash, Z3ASTHandleCmp>
-      expr_to_track;
   std::unordered_set<Z3ASTHandle, Z3ASTHandleHash, Z3ASTHandleCmp> exprs;
 
   unsigned id = 0;
   std::string freshName = "freshName";
-  for (auto const &constraint : query.constraints.cs()) {
+  for (auto const &constraint : query.constraints.v) {
     Z3ASTHandle z3Constraint = builder->construct(constraint);
     if (ProduceUnsatCore && validityCore) {
       Z3ASTHandle p = builder->buildFreshBoolConst(
           (freshName + llvm::utostr(++id)).c_str());
-      z3_ast_expr_to_klee_expr.insert({p, constraint});
-      z3_ast_expr_constraints.push_back(p);
-      expr_to_track[z3Constraint] = p;
+      env.z3_ast_expr_to_klee_expr.insert({p, constraint});
+      env.z3_ast_expr_constraints.v.push_back(p);
+      env.expr_to_track[z3Constraint] = p;
     }
 
     Z3_goal_assert(builder->ctx, goal, z3Constraint);
@@ -396,12 +743,8 @@ bool Z3SolverImpl::internalRunSolver(
     constant_arrays_in_query.visit(constraint);
   }
   ++stats::queries;
-  if (objects)
+  if (!env.objects.v.empty())
     ++stats::queryCounterexamples;
-
-  Z3ASTHandle z3QueryExpr =
-      Z3ASTHandle(builder->construct(query.expr), builder->ctx);
-  constant_arrays_in_query.visit(query.expr);
 
   for (auto const &constant_array : constant_arrays_in_query.results) {
     assert(builder->constant_array_assertions.count(constant_array) == 1 &&
@@ -413,15 +756,6 @@ bool Z3SolverImpl::internalRunSolver(
     }
   }
 
-  // KLEE Queries are validity queries i.e.
-  // ∀ X Constraints(X) → query(X)
-  // but Z3 works in terms of satisfiability so instead we ask the
-  // negation of the equivalent i.e.
-  // ∃ X Constraints(X) ∧ ¬ query(X)
-  Z3ASTHandle z3NotQueryExpr =
-      Z3ASTHandle(Z3_mk_not(builder->ctx, z3QueryExpr), builder->ctx);
-  Z3_goal_assert(builder->ctx, goal, z3NotQueryExpr);
-
   // Assert an generated side constraints we have to this last so that all other
   // constraints have been traversed so we have all the side constraints needed.
   for (std::vector<Z3ASTHandle>::iterator it = builder->sideConstraints.begin(),
@@ -432,38 +766,19 @@ bool Z3SolverImpl::internalRunSolver(
     exprs.insert(sideConstraint);
   }
 
-  std::vector<const Array *> arrays = query.gatherArrays();
-  bool forceTactic = true;
-  for (const Array *array : arrays) {
-    if (isa<SymbolicSizeConstantSource>(array->source)) {
-      forceTactic = false;
-      break;
-    }
-  }
+  Z3_solver theSolver = initNativeZ3(query, probe, goal);
 
-  Z3_solver theSolver;
-  if (forceTactic && Z3_probe_apply(builder->ctx, probe, goal)) {
-    theSolver = Z3_mk_solver_for_logic(
-        builder->ctx, Z3_mk_string_symbol(builder->ctx, "QF_AUFBV"));
-  } else {
-    theSolver = Z3_mk_solver(builder->ctx);
-  }
-  Z3_solver_inc_ref(builder->ctx, theSolver);
-  Z3_solver_set_params(builder->ctx, theSolver, solverParameters);
-
-  for (std::unordered_set<Z3ASTHandle, Z3ASTHandleHash,
-                          Z3ASTHandleCmp>::iterator it = exprs.begin(),
-                                                    ie = exprs.end();
+  for (auto it = exprs.cbegin(),
+            ie = exprs.cend();
        it != ie; ++it) {
     Z3ASTHandle expr = *it;
-    if (expr_to_track.count(expr)) {
+    if (env.expr_to_track.count(expr)) {
       Z3_solver_assert_and_track(builder->ctx, theSolver, expr,
-                                 expr_to_track[expr]);
+                                 env.expr_to_track[expr]);
     } else {
       Z3_solver_assert(builder->ctx, theSolver, expr);
     }
   }
-  Z3_solver_assert(builder->ctx, theSolver, z3NotQueryExpr);
 
   if (dumpedQueriesFile) {
     *dumpedQueriesFile << "; start Z3 query\n";
@@ -476,22 +791,18 @@ bool Z3SolverImpl::internalRunSolver(
     dumpedQueriesFile->flush();
   }
 
-  constraints_ty allConstraints = query.constraints.cs();
-  allConstraints.insert(query.expr);
-  std::unordered_map<const Array *, ExprHashSet> usedArrayBytes;
-  for (auto constraint : allConstraints) {
+  for (auto constraint : query.constraints.v) {
     std::vector<ref<ReadExpr>> reads;
     findReads(constraint, true, reads);
     for (auto readExpr : reads) {
       const Array *readFromArray = readExpr->updates.root;
       assert(readFromArray);
-      usedArrayBytes[readFromArray].insert(readExpr->index);
+      env.usedArrayBytes[readFromArray].insert(readExpr->index);
     }
   }
 
   ::Z3_lbool satisfiable = Z3_solver_check(builder->ctx, theSolver);
-  runStatusCode = handleSolverResponse(theSolver, satisfiable, objects, values,
-                                       usedArrayBytes, hasSolution);
+  runStatusCode = handleSolverResponse(theSolver, satisfiable, env, values, hasSolution);
   if (ProduceUnsatCore && validityCore && satisfiable == Z3_L_FALSE) {
     constraints_ty unsatCore;
     Z3_ast_vector z3_unsat_core =
@@ -508,15 +819,15 @@ bool Z3SolverImpl::internalRunSolver(
       z3_ast_expr_unsat_core.insert(constraint);
     }
 
-    for (auto &z3_constraint : z3_ast_expr_constraints) {
+    for (const auto &z3_constraint : env.z3_ast_expr_constraints.v) {
       if (z3_ast_expr_unsat_core.find(z3_constraint) !=
           z3_ast_expr_unsat_core.end()) {
-        ref<Expr> constraint = z3_ast_expr_to_klee_expr[z3_constraint];
+        ref<Expr> constraint = env.z3_ast_expr_to_klee_expr[z3_constraint];
         unsatCore.insert(constraint);
       }
     }
     assert(validityCore && "validityCore cannot be nullptr");
-    *validityCore = ValidityCore(unsatCore, query.expr);
+    *validityCore = ValidityCore(unsatCore, query.getOriginalQueryExpr());
 
     Z3_ast_vector assertions =
         Z3_solver_get_assertions(builder->ctx, theSolver);
@@ -533,7 +844,7 @@ bool Z3SolverImpl::internalRunSolver(
 
   Z3_goal_dec_ref(builder->ctx, goal);
   Z3_probe_dec_ref(builder->ctx, probe);
-  Z3_solver_dec_ref(builder->ctx, theSolver);
+  deinitNativeZ3(theSolver);
 
   // Clear the builder's cache to prevent memory usage exploding.
   // By using ``autoClearConstructCache=false`` and clearning now
@@ -559,27 +870,23 @@ bool Z3SolverImpl::internalRunSolver(
 
 SolverImpl::SolverRunStatus Z3SolverImpl::handleSolverResponse(
     ::Z3_solver theSolver, ::Z3_lbool satisfiable,
-    const std::vector<const Array *> *objects,
+    const Z3SolverEnv &env,
     std::vector<SparseStorage<unsigned char>> *values,
-    const std::unordered_map<const Array *, ExprHashSet> &usedArrayBytes,
     bool &hasSolution) {
   switch (satisfiable) {
   case Z3_L_TRUE: {
     hasSolution = true;
-    if (!objects) {
+    if (env.objects.v.empty()) {
       // No assignment is needed
-      assert(values == NULL);
+      assert(!values);
       return SolverImpl::SOLVER_RUN_STATUS_SUCCESS_SOLVABLE;
     }
     assert(values && "values cannot be nullptr");
     ::Z3_model theModel = Z3_solver_get_model(builder->ctx, theSolver);
     assert(theModel && "Failed to retrieve model");
     Z3_model_inc_ref(builder->ctx, theModel);
-    values->reserve(objects->size());
-    for (std::vector<const Array *>::const_iterator it = objects->begin(),
-                                                    ie = objects->end();
-         it != ie; ++it) {
-      const Array *array = *it;
+    values->reserve(env.objects.v.size());
+    for (auto array : env.objects.v) {
       SparseStorage<unsigned char> data;
 
       ::Z3_ast arraySizeExpr;
@@ -596,9 +903,9 @@ SolverImpl::SolverRunStatus Z3SolverImpl::handleSolverResponse(
       assert(success && "Failed to get size");
 
       data.resize(arraySize);
-      if (usedArrayBytes.count(array)) {
+      if (env.usedArrayBytes.count(array)) {
         std::unordered_set<uint64_t> offsetValues;
-        for (ref<Expr> offsetExpr : usedArrayBytes.at(array)) {
+        for (const ref<Expr> &offsetExpr : env.usedArrayBytes.at(array)) {
           ::Z3_ast arrayElementOffsetExpr;
           Z3_model_eval(builder->ctx, theModel, builder->construct(offsetExpr),
                         Z3_TRUE, &arrayElementOffsetExpr);
@@ -734,5 +1041,310 @@ bool Z3SolverImpl::validateZ3Model(::Z3_solver &theSolver,
 SolverImpl::SolverRunStatus Z3SolverImpl::getOperationStatusCode() {
   return runStatusCode;
 }
+
+struct ConstraintDistance {
+  size_t toPopSize = 0;
+  ConstraintQuery toPush;
+
+  explicit ConstraintDistance() {}
+  ConstraintDistance(const ConstraintQuery &q) : toPush(q) {}
+  explicit ConstraintDistance(size_t toPopSize, const ConstraintQuery &q)
+    : toPopSize(toPopSize), toPush(q) {}
+
+  size_t getDistance() const {
+    return toPopSize + toPush.size();
+  }
+
+  bool isOnlyPush() const {
+    return toPopSize == 0;
+  }
+
+  void dump() const {
+    llvm::errs() << "ConstraintDistance: pop: " << toPopSize << "; push:\n";
+    klee::dump(toPush.constraints);
+  }
+};
+
+class Z3IncNativeSolver {
+private:
+  Z3_solver nativeSolver = nullptr;
+  Z3_context ctx;
+  Z3_params solverParameters;
+  /// underlying solver frames
+  /// saved only for calculating distances from next queries
+  ConstraintFrames frames;
+
+  void pop(size_t popSize);
+  void push();
+
+public:
+  Z3SolverEnv env;
+
+  Z3IncNativeSolver(Z3_context ctx, Z3_params solverParameters)
+    : ctx(ctx), solverParameters(solverParameters) {}
+  ~Z3IncNativeSolver();
+
+  void distance(const ConstraintQuery &query, ConstraintDistance &delta) const;
+
+  void popPush(ConstraintDistance &delta);
+
+  Z3_solver getOrInit(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal);
+
+  void dump() const { ::klee::dump(frames); }
+};
+
+void Z3IncNativeSolver::pop(size_t popSize) {
+  if (nativeSolver == nullptr)
+    return;
+  Z3_solver_pop(ctx, nativeSolver, popSize);
+}
+
+void Z3IncNativeSolver::push() {
+  if (nativeSolver == nullptr)
+    return;
+  Z3_solver_push(ctx, nativeSolver);
+}
+
+void Z3IncNativeSolver::popPush(ConstraintDistance &delta) {
+  if (nativeSolver)
+    llvm::errs() << "Z3_solver_get_num_scopes: " << Z3_solver_get_num_scopes(ctx, nativeSolver) << "\n";
+  llvm::errs() << "frames: " << frames.end() - frames.begin() << "\n";
+  llvm::errs() << "env.objects: " << env.objects.end() - env.objects.begin() << "\n";
+  env.push();
+  env.pop(delta.toPopSize);
+  pop(delta.toPopSize);
+  push();
+  frames.pop(delta.toPopSize);
+  frames.extend(delta.toPush.constraints.v);
+  llvm::errs() << "frames: " << frames.end() - frames.begin() << "\n";
+  if (nativeSolver) {
+    auto num_scopes = Z3_solver_get_num_scopes(ctx, nativeSolver);
+    llvm::errs() << "Z3_solver_get_num_scopes: " << num_scopes << "\n";
+    assert(num_scopes == frames.end() - frames.begin());
+  }
+  llvm::errs() << "env.objects: " << env.objects.end() - env.objects.begin() << "\n";
+  assert(env.objects.end() - env.objects.begin() == frames.end() - frames.begin());
+}
+
+Z3_solver Z3IncNativeSolver::getOrInit(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal) {
+  if (nativeSolver == nullptr) {
+    nativeSolver = createNativeZ3(ctx, solverParameters, query, probe, goal);
+    push();
+  }
+  llvm::errs() << "Z3_solver_get_num_scopes: " << Z3_solver_get_num_scopes(ctx, nativeSolver) << "\n";
+  return nativeSolver;
+}
+
+Z3IncNativeSolver::~Z3IncNativeSolver() {
+  if (nativeSolver)
+    deleteNativeZ3(ctx, nativeSolver);
+}
+
+void Z3IncNativeSolver::distance(const ConstraintQuery &query, ConstraintDistance &delta) const {
+  llvm::errs() << "Solver:\n";
+  klee::dump(frames);
+  auto sit = frames.v.begin();
+  auto site = frames.v.end();
+  auto qit = query.constraints.v.begin();
+  auto qite = query.constraints.v.end();
+  auto it = frames.begin();
+  auto ite = frames.end();
+  size_t intersect = 0;
+  for (; it != ite && sit != site && qit != qite && *sit == *qit; it++) {
+    size_t frame_size = *it;
+    for (size_t i = 0;
+         i < frame_size && sit != site && qit != qite && *sit == *qit;
+         i++, sit++, qit++, intersect++) {}
+  }
+  for (; sit != site && qit != qite && *sit == *qit
+       ; sit++, qit++, intersect++) {}
+  size_t toPop, extraTakeFromOther;
+  ConstraintFrames d;
+  if (sit == site) { // solver frames ended
+    toPop = 0;
+    extraTakeFromOther = 0;
+  } else {
+    frames.takeBefore(intersect, toPop, extraTakeFromOther);
+  }
+  query.constraints.takeAfter(intersect - extraTakeFromOther, d);
+  delta = ConstraintDistance(toPop, d);
+  llvm::errs() << "Delta:\n";
+  delta.dump();
+}
+
+class Z3TreeSolverImpl : public Z3SolverImpl {
+private:
+  unsigned maxSolvers;
+  Z3IncNativeSolver *currentSolver = nullptr;
+
+  std::deque<Z3IncNativeSolver *> recentlyUsed;
+  std::vector<Z3IncNativeSolver *> recycledSolvers;
+
+  void reuseOrCreateZ3(
+    const ConstraintQuery &query,
+    ConstraintDistance &delta);
+  void findSuitableSolver(
+    const ConstraintQuery &query,
+    ConstraintDistance &delta);
+
+  using Z3SolverImpl::check;
+  bool check(ConstraintDistance &delta, ref<SolverResponse> &result);
+
+public:
+  Z3TreeSolverImpl(Z3BuilderType type, unsigned maxSolvers)
+    : Z3SolverImpl(type), maxSolvers(maxSolvers) {};
+  ~Z3TreeSolverImpl();
+
+  /// implementation of Z3SolverImpl interface
+  Z3_solver initNativeZ3(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal);
+  void deinitNativeZ3(Z3_solver theSolver);
+
+  void notifyStateTermination(std::uint32_t id);
+
+  /// implementation of the SolverImpl interface
+  bool computeTruth(const Query &query, bool &isValid);
+  bool computeValidity(const Query &query, PartialValidity &result);
+  bool computeInitialValues(const Query &query,
+                            const std::vector<const Array *> &objects,
+                            std::vector<SparseStorage<unsigned char>> &values,
+                            bool &hasSolution);
+  bool check(const Query &query, ref<SolverResponse> &result);
+  bool computeValidityCore(const Query &query, ValidityCore &validityCore,
+                           bool &isValid);
+  SolverRunStatus getOperationStatusCode();
+};
+
+Z3TreeSolverImpl::~Z3TreeSolverImpl() {
+  for (auto solver : recentlyUsed)
+    delete solver;
+  for (auto solver : recycledSolvers)
+    delete solver;
+  if (currentSolver)
+    delete currentSolver;
+}
+
+Z3_solver Z3TreeSolverImpl::initNativeZ3(const ConstraintQuery &query, Z3_probe probe, Z3_goal goal) {
+  return currentSolver->getOrInit(query, probe, goal);
+}
+
+void Z3TreeSolverImpl::deinitNativeZ3(Z3_solver theSolver) {
+  recentlyUsed.push_front(currentSolver);
+  currentSolver = nullptr;
+}
+
+bool Z3TreeSolverImpl::check(ConstraintDistance &delta,
+                            ref<SolverResponse> &result) {
+  currentSolver->popPush(delta);
+  llvm::errs() << "SOLVING: " << delta.getDistance() << "\n";
+  return check(delta.toPush, currentSolver->env, result);
+}
+
+void Z3TreeSolverImpl::reuseOrCreateZ3(
+  const ConstraintQuery &query,
+  ConstraintDistance &delta) {
+  auto min_delta = ConstraintDistance(query);
+  auto min_distance = min_delta.getDistance();
+  llvm::errs() << "min_distance: " << min_distance << "\n";
+  Z3IncNativeSolver *min_solver = nullptr;
+  for (auto solver : recycledSolvers) {
+    ConstraintDistance d;
+    solver->distance(query, d);
+    auto distance = d.getDistance();
+    llvm::errs() << "distance: " << distance << "\n";
+    if (distance < min_distance) {
+      min_delta = d;
+      min_distance = distance;
+      min_solver = solver;
+    }
+  }
+  currentSolver = min_solver ? min_solver : new Z3IncNativeSolver(builder->ctx, solverParameters);
+  delta = min_delta;
+}
+
+void Z3TreeSolverImpl::findSuitableSolver(
+  const ConstraintQuery &query,
+  ConstraintDistance &delta) {
+  for (auto it  = recentlyUsed.begin(),
+            ite = recentlyUsed.end();
+       it != ite; it++) {
+    currentSolver = *it;
+    ConstraintDistance d;
+    currentSolver->distance(query, d);
+    if (d.isOnlyPush()) {
+      recentlyUsed.erase(it);
+      delta = d;
+      return;
+    }
+  }
+  if (recentlyUsed.size() < maxSolvers) {
+    reuseOrCreateZ3(query, delta);
+    return;
+  }
+  currentSolver = recentlyUsed.back();
+  recentlyUsed.pop_back();
+  currentSolver->distance(query, delta);
+}
+
+bool Z3TreeSolverImpl::computeTruth(const Query &query, bool &isValid) {
+  assert(false);
+  return false; //TODO: not implemented
+}
+
+bool Z3TreeSolverImpl::computeValidity(const Query &query,
+                                       PartialValidity &result) {
+  assert(false);
+  return false; //TODO: not implemented
+}
+
+bool Z3TreeSolverImpl::computeInitialValues(
+    const Query &query, const std::vector<const Array *> &objects,
+    std::vector<SparseStorage<unsigned char>> &values, bool &hasSolution) {
+  llvm::errs() << "Z3TreeSolverImpl::computeInitialValues:\n";
+  query.dump();
+  assert(false);
+  return false; //TODO: not implemented
+}
+
+bool Z3TreeSolverImpl::check(const Query &q,
+                             ref<SolverResponse> &result) {
+  ConstraintDistance delta;
+  ConstraintQuery query(q);
+  llvm::errs() << "Query:\n";
+  dump(query.constraints);
+  findSuitableSolver(query, delta);
+  llvm::errs() << "Z3TreeSolverImpl::check current solver:\n";
+  currentSolver->dump();
+  if (currentSolver->nativeSolver) {
+    auto s = Z3_solver_to_string(currentSolver->ctx, currentSolver->nativeSolver);
+    llvm::errs() << "Z3 inner solver:\n" << s << "\n";
+  }
+  llvm::errs() << "Z3TreeSolverImpl::check current delta:\n";
+  delta.dump();
+  auto ok = check(delta, result);
+  llvm::errs() << "Z3TreeSolverImpl::check result: " << ok << " and\n";
+  result->dump();
+  return ok;
+}
+
+bool Z3TreeSolverImpl::computeValidityCore(const Query &query,
+                                                ValidityCore &validityCore,
+                                                bool &isValid) {
+  assert(false);
+  return false; //TODO: not implemented
+}
+
+Z3TreeSolverImpl::SolverRunStatus Z3TreeSolverImpl::getOperationStatusCode() {
+  assert(false);
+  return SOLVER_RUN_STATUS_TIMEOUT; //TODO: not implemented
+}
+
+void Z3TreeSolverImpl::notifyStateTermination(std::uint32_t id) {
+  assert(false);
+  return; //TODO: not implemented
+}
+
+Z3TreeSolver::Z3TreeSolver(Z3BuilderType type, unsigned maxSolvers)
+  : Solver(new Z3TreeSolverImpl(type, maxSolvers)) {}
+
 } // namespace klee
 #endif // ENABLE_Z3

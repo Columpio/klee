@@ -47,6 +47,9 @@ public:
     return solver->getConstraintLog(query);
   }
 
+  /// @brief Notify the solver that the state with specified id has been terminated
+  void notifyStateTermination(std::uint32_t id);
+
   bool evaluate(const ConstraintSet &, ref<Expr>, PartialValidity &result,
                 SolverQueryMetaData &metaData,
                 bool produceValidityCore = false);

@@ -33,6 +33,12 @@ public:
   /// is off.
   virtual void setCoreSolverTimeout(time::Span timeout);
 };
+
+class Z3TreeSolver : public Solver {
+public:
+  Z3TreeSolver(Z3BuilderType type, unsigned maxSolvers);
+};
+
 } // namespace klee
 
 #endif /* KLEE_Z3SOLVER_H */

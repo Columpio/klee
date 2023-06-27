@@ -192,6 +192,9 @@ public:
 
   virtual char *getConstraintLog(const Query &query);
   virtual void setCoreSolverTimeout(time::Span timeout);
+
+  /// @brief Notify the solver that the state with specified id has been terminated
+  void notifyStateTermination(std::uint32_t id);
 };
 
 /* *** */
@@ -261,6 +264,12 @@ Solver *createCoreSolver(CoreSolverType cst);
 Solver *createConcretizingSolver(Solver *s,
                                  ConcretizationManager *concretizationManager,
                                  AddressGenerator *addressGenerator);
+
+/// Return a list of all unique symbolic objects referenced by the
+/// given Query.
+void findSymbolicObjects(const Query &query,
+                         std::vector<const Array *> &results);
+
 } // namespace klee
 
 #endif /* KLEE_SOLVER_H */

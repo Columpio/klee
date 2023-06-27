@@ -379,7 +379,10 @@ public:
   bool visited(KBlock *block) const;
 
   std::uint32_t getID() const { return id; };
-  void setID() { id = nextID++; };
+  void setID() {
+    id = nextID++;
+    queryMetaData.id = id;
+  };
   llvm::BasicBlock *getInitPCBlock() const;
   llvm::BasicBlock *getPrevPCBlock() const;
   llvm::BasicBlock *getPCBlock() const;

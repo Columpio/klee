@@ -140,14 +140,8 @@ bool AssignmentValidatingSolver::check(const Query &query,
     return true;
   }
 
-  ExprHashSet expressions;
-  assert(!query.containsSymcretes());
-  expressions.insert(query.constraints.cs().begin(),
-                     query.constraints.cs().end());
-  expressions.insert(query.expr);
-
   std::vector<const Array *> objects;
-  findSymbolicObjects(expressions.begin(), expressions.end(), objects);
+  findSymbolicObjects(query, objects);
   std::vector<SparseStorage<unsigned char>> values;
 
   assert(isa<InvalidResponse>(result));
