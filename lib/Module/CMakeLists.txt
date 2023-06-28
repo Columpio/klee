@@ -7,6 +7,7 @@
 #
 #===------------------------------------------------------------------------===#
 set(KLEE_MODULE_COMPONENT_SRCS
+  Annotation.cpp
   CallSplitter.cpp
   Checks.cpp
   CodeGraphDistance.cpp

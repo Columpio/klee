@@ -733,7 +733,8 @@ public:
             const std::unordered_set<std::string> &mainModuleFunctions,
             const std::unordered_set<std::string> &mainModuleGlobals,
             std::unique_ptr<InstructionInfoTable> origInfos,
-            const std::set<std::string> &ignoredExternals) override;
+            const std::set<std::string> &ignoredExternals,
+            const Annotations &annotations) override;
 
   std::map<std::string, llvm::Type *>
   getAllExternals(const std::set<std::string> &ignoredExternals) override;

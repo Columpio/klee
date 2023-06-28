@@ -10,6 +10,7 @@
 #define KLEE_INTERPRETER_H
 
 #include "TerminationTypes.h"
+#include "klee/Module/Annotation.h"
 
 #include "klee/Module/SarifReport.h"
 
@@ -157,7 +158,8 @@ public:
             const std::unordered_set<std::string> &mainModuleFunctions,
             const std::unordered_set<std::string> &mainModuleGlobals,
             std::unique_ptr<InstructionInfoTable> origInfos,
-            const std::set<std::string> &ignoredExternals) = 0;
+            const std::set<std::string> &ignoredExternals,
+            const Annotations &annotations) = 0;
 
   virtual std::map<std::string, llvm::Type *>
   getAllExternals(const std::set<std::string> &ignoredExternals) = 0;
