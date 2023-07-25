@@ -9,78 +9,98 @@
 #include "nlohmann/json.hpp"
 #include "nonstd/optional.hpp"
 
+#include "klee/Config/config.h"
+
+#include "llvm/IR/Module.h"
+
 using nonstd::nullopt;
 using nonstd::optional;
 using json = nlohmann::json;
 
 namespace klee {
 
+namespace Statement {
+enum class Kind {
+  Unknown,
+
+  Deref,
+  InitNull,
+  AllocSource,
+};
+
+enum class Property {
+  Unknown,
+
+  Deterministic,
+  Noreturn,
+};
+
+struct Unknown {
+protected:
+  std::string rawAnnotation;
+  std::string rawOffset;
+  std::string rawValue;
+
+public:
+  std::vector<std::string> offset;
+
+  explicit Unknown(const std::string &str = "Unknown");
+  virtual ~Unknown();
+
+  virtual bool operator==(const Unknown &other) const;
+  [[nodiscard]] virtual Kind getKind() const;
+
+  [[nodiscard]] const std::vector<std::string> &getOffset() const;
+  [[nodiscard]] std::string toString() const;
+};
+
+struct Deref final : public Unknown {
+  explicit Deref(const std::string &str = "Deref");
+
+  [[nodiscard]] Kind getKind() const override;
+};
+
+struct InitNull final : public Unknown {
+  explicit InitNull(const std::string &str = "InitNull");
+
+  [[nodiscard]] Kind getKind() const override;
+};
+
+struct AllocSource final : public Unknown {
+public:
+  enum Type {
+    Alloc = 1,       // malloc, calloc, realloc
+    New = 2,         // operator new
+    NewBrackets = 3, // operator new[]
+    OpenFile = 4,    // open file (fopen, open)
+    MutexLock = 5    // mutex lock (pthread_mutex_lock)
+  };
+
+  Type value;
+
+  explicit AllocSource(const std::string &str = "AllocSource::1");
+
+  [[nodiscard]] Kind getKind() const override;
+};
+
+using Ptr = std::shared_ptr<Unknown>;
+bool operator==(const Ptr &first, const Ptr &second);
+} // namespace Statement
+
 // Annotation format: https://github.com/UnitTestBot/klee/discussions/92
 struct Annotation {
-  enum class StatementKind {
-    Unknown,
-
-    Deref,
-    InitNull,
-  };
-
-  enum class Property {
-    Unknown,
-
-    Determ,
-    Noreturn,
-  };
-
-  struct StatementUnknown {
-    explicit StatementUnknown(const std::string &str);
-    virtual ~StatementUnknown();
-
-    virtual Annotation::StatementKind getStatementName() const;
-    virtual bool operator==(const StatementUnknown &other) const;
-
-    std::string statementStr;
-    std::vector<std::string> offset;
-
-  protected:
-    void parseOffset(const std::string &offsetStr);
-    void parseOnlyOffset(const std::string &str);
-  };
-
-  struct StatementDeref final : public StatementUnknown {
-    explicit StatementDeref(const std::string &str);
-
-    Annotation::StatementKind getStatementName() const override;
-  };
-
-  struct StatementInitNull final : public StatementUnknown {
-    explicit StatementInitNull(const std::string &str);
-
-    Annotation::StatementKind getStatementName() const override;
-  };
-
-  using StatementPtr = std::shared_ptr<StatementUnknown>;
-  using StatementPtrs = std::vector<StatementPtr>;
+  std::string functionName;
+  std::vector<Statement::Ptr> returnStatements;
+  std::vector<std::vector<Statement::Ptr>> argsStatements;
+  std::set<Statement::Property> properties;
 
   bool operator==(const Annotation &other) const;
-
-  std::string functionName;
-  std::vector<StatementPtrs> statements;
-  std::set<Property> properties;
 };
 
-using Annotations = std::map<std::string, Annotation>;
+using AnnotationsMap = std::map<std::string, Annotation>;
 
-const std::map<std::string, Annotation::Property> toProperties{
-    {"determ", Annotation::Property::Determ},
-    {"noreturn", Annotation::Property::Noreturn},
-};
-
-Annotations parseAnnotationsFile(const json &annotationsJson);
-Annotations parseAnnotationsFile(const std::string &path);
-
-bool operator==(const Annotation::StatementPtr &first,
-                const Annotation::StatementPtr &second);
-
+AnnotationsMap parseAnnotationsJson(const json &annotationsJson);
+AnnotationsMap parseAnnotations(const std::string &path, const llvm::Module *m);
 } // namespace klee
 
 #endif // KLEE_ANNOTATION_H

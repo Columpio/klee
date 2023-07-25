@@ -139,7 +139,6 @@ jobs:
     runs-on: macos-latest
     env:
       BASE: /tmp
-      LLVM_VERSION: 11
       SOLVERS: STP
       UCLIBC_VERSION: 0
       USE_TCMALLOC: 0

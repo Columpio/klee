@@ -10,15 +10,18 @@ TEST(AnnotationsTest, Empty) {
   const json j = json::parse(R"(
 {
     "foo" : {
-        "annotation" : [],
+        "annotation" : [[]],
         "properties" : []
     }
 }
 )");
-  const Annotations expected = Annotations{
-      {"foo", Annotation{"foo", std::vector<Annotation::StatementPtrs>(),
-                         std::set<Annotation::Property>()}}};
-  const Annotations actual = parseAnnotationsFile(j);
+  const AnnotationsMap expected = {
+      {"foo",
+       {/*functionName*/ "foo",
+        /*returnStatements*/ std::vector<Statement::Ptr>(),
+        /*argsStatements*/ std::vector<std::vector<Statement::Ptr>>(),
+        /*properties*/ std::set<Statement::Property>()}}};
+  const AnnotationsMap actual = parseAnnotationsJson(j);
   ASSERT_EQ(expected, actual);
 }
 
@@ -26,17 +29,20 @@ TEST(AnnotationsTest, KnownProperties) {
   const json j = json::parse(R"(
 {
     "foo" : {
-        "annotation" : [],
-        "properties" : ["determ", "noreturn", "determ"]
+        "annotation" : [[]],
+        "properties" : ["deterministic", "noreturn", "deterministic"]
     }
 }
 )");
-  const std::set<Annotation::Property> properties{
-      Annotation::Property::Determ, Annotation::Property::Noreturn};
-  const Annotations expected = Annotations{
-      {"foo", Annotation{"foo", std::vector<Annotation::StatementPtrs>(),
-                         properties}}};
-  const Annotations actual = parseAnnotationsFile(j);
+  const std::set<Statement::Property> properties{
+      Statement::Property::Deterministic, Statement::Property::Noreturn};
+  const AnnotationsMap expected = {
+      {"foo",
+       {/*functionName*/ "foo",
+        /*returnStatements*/ std::vector<Statement::Ptr>(),
+        /*argsStatements*/ std::vector<std::vector<Statement::Ptr>>(),
+        /*properties*/ properties}}};
+  const AnnotationsMap actual = parseAnnotationsJson(j);
   ASSERT_EQ(expected, actual);
 }
 
@@ -44,18 +50,21 @@ TEST(AnnotationsTest, UnknownProperties) {
   const json j = json::parse(R"(
 {
     "foo" : {
-        "annotation" : [],
-        "properties" : ["derm", "noreturn", "determ"]
+        "annotation" : [[]],
+        "properties" : ["noname", "noreturn", "deterministic"]
     }
 }
 )");
-  const std::set<Annotation::Property> properties{
-      Annotation::Property::Determ, Annotation::Property::Noreturn,
-      Annotation::Property::Unknown};
-  const Annotations expected = Annotations{
-      {"foo", Annotation{"foo", std::vector<Annotation::StatementPtrs>(),
-                         properties}}};
-  const Annotations actual = parseAnnotationsFile(j);
+  const std::set<Statement::Property> properties{
+      Statement::Property::Deterministic, Statement::Property::Noreturn,
+      Statement::Property::Unknown};
+  const AnnotationsMap expected = {
+      {"foo",
+       {/*functionName*/ "foo",
+        /*returnStatements*/ std::vector<Statement::Ptr>(),
+        /*argsStatements*/ std::vector<std::vector<Statement::Ptr>>(),
+        /*properties*/ properties}}};
+  const AnnotationsMap actual = parseAnnotationsJson(j);
   ASSERT_EQ(expected, actual);
 }
 
@@ -68,9 +77,9 @@ TEST(AnnotationsTest, UnknownAnnotations) {
     }
 }
 )");
-  const Annotations actual = parseAnnotationsFile(j);
-  ASSERT_EQ(actual.at("foo").statements[1][0]->getStatementName(),
-            Annotation::StatementKind::Unknown);
+  const AnnotationsMap actual = parseAnnotationsJson(j);
+  ASSERT_EQ(actual.at("foo").argsStatements[0][0]->getKind(),
+            Statement::Kind::Unknown);
 }
 
 TEST(AnnotationsTest, KnownAnnotations) {
@@ -82,13 +91,13 @@ TEST(AnnotationsTest, KnownAnnotations) {
     }
 }
 )");
-  const Annotations actual = parseAnnotationsFile(j);
-  ASSERT_EQ(actual.at("foo").statements[0][0]->getStatementName(),
-            Annotation::StatementKind::InitNull);
-  ASSERT_EQ(actual.at("foo").statements[1][0]->getStatementName(),
-            Annotation::StatementKind::Deref);
-  ASSERT_EQ(actual.at("foo").statements[1][1]->getStatementName(),
-            Annotation::StatementKind::InitNull);
+  const AnnotationsMap actual = parseAnnotationsJson(j);
+  ASSERT_EQ(actual.at("foo").returnStatements[0]->getKind(),
+            Statement::Kind::InitNull);
+  ASSERT_EQ(actual.at("foo").argsStatements[0][0]->getKind(),
+            Statement::Kind::Deref);
+  ASSERT_EQ(actual.at("foo").argsStatements[0][1]->getKind(),
+            Statement::Kind::InitNull);
 }
 
 TEST(AnnotationsTest, WithOffsets) {
@@ -100,9 +109,9 @@ TEST(AnnotationsTest, WithOffsets) {
     }
 }
 )");
-  const Annotations actual = parseAnnotationsFile(j);
-  ASSERT_EQ(actual.at("foo").statements[0][0]->getStatementName(),
-            Annotation::StatementKind::InitNull);
+  const AnnotationsMap actual = parseAnnotationsJson(j);
+  ASSERT_EQ(actual.at("foo").returnStatements[0]->getKind(),
+            Statement::Kind::InitNull);
   const std::vector<std::string> expectedOffset{"*", "10", "*", "&"};
-  ASSERT_EQ(actual.at("foo").statements[0][0]->offset, expectedOffset);
+  ASSERT_EQ(actual.at("foo").returnStatements[0]->offset, expectedOffset);
 }

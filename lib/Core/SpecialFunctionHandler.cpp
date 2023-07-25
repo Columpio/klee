@@ -921,7 +921,7 @@ void SpecialFunctionHandler::handleMakeSymbolic(
     assert(success && "FIXME: Unhandled solver failure");
 
     if (res) {
-      uint64_t sid = 0;
+      uint64_t sid = 0; // TODO: Unused variable
       if (state.arrayNames.count(name)) {
         sid = state.arrayNames[name];
       }
@@ -956,7 +956,66 @@ void SpecialFunctionHandler::handleMakeMock(ExecutionState &state,
         state, "Empty name of function in klee_make_mock");
     return;
   }
-  executor.executeMakeMock(state, target, arguments);
+
+  KFunction *kf = target->parent->parent;
+
+  Executor::ExactResolutionList rl;
+  executor.resolveExact(state, arguments[0],
+                        executor.typeSystemManager->getUnknownType(), rl,
+                        "make_symbolic");
+
+  for (Executor::ExactResolutionList::iterator it = rl.begin(), ie = rl.end();
+       it != ie; ++it) {
+    ObjectPair op = it->second->addressSpace.findObject(it->first);
+    const MemoryObject *mo = op.first;
+    mo->setName(name);
+    mo->updateTimestamp();
+
+    const ObjectState *old = op.second;
+    ExecutionState *s = it->second;
+
+    if (old->readOnly) {
+      executor.terminateStateOnUserError(
+          *s, "cannot make readonly object symbolic");
+      return;
+    }
+
+    bool res;
+    bool success __attribute__((unused)) = executor.solver->mustBeTrue(
+        s->constraints.cs(),
+        EqExpr::create(
+            ZExtExpr::create(arguments[1], Context::get().getPointerWidth()),
+            mo->getSizeExpr()),
+        res, s->queryMetaData);
+    assert(success && "FIXME: Unhandled solver failure");
+
+    if (res) {
+      ref<SymbolicSource> source;
+      switch (executor.interpreterOpts.MockStrategy) {
+      case MockStrategy::None:
+        klee_error("klee_make_mock is not allowed when mock strategy is none");
+        break;
+      case MockStrategy::Naive:
+        source =
+            SourceBuilder::mockNaive(executor.kmodule.get(), *kf->function,
+                                     executor.updateNameVersion(state, name));
+        break;
+      case MockStrategy::Deterministic:
+        std::vector<ref<Expr>> args(kf->numArgs);
+        for (size_t i = 0; i < kf->numArgs; i++) {
+          args[i] = executor.getArgumentCell(state, kf, i).value;
+        }
+        source = SourceBuilder::mockDeterministic(executor.kmodule.get(),
+                                                  *kf->function, args);
+        break;
+      }
+      executor.executeMakeSymbolic(state, mo, old->getDynamicType(), source,
+                                   false);
+    } else {
+      executor.terminateStateOnUserError(*s,
+                                         "Wrong size given to klee_make_mock");
+    }
+  }
 }
 
 void SpecialFunctionHandler::handleMarkGlobal(

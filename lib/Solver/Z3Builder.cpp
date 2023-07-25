@@ -329,11 +329,6 @@ Z3ASTHandle Z3Builder::getArrayForUpdate(const Array *root,
                                          const UpdateNode *un) {
   // Iterate over the update nodes, until we find a cached version of the node,
   // or no more update nodes remain
-  if (root->source->isMock()) {
-    klee_error("Updates applied to mock array %s are not allowed",
-               root->getName().c_str());
-  }
-  // FIXME: This really needs to be non-recursive.
   Z3ASTHandle un_expr;
   std::vector<const UpdateNode *> update_nodes;
   for (; un && !_arr_hash.lookupUpdateNodeExpr(un, un_expr);

@@ -6,7 +6,7 @@ extern void *calloc(size_t num, size_t size);
 extern void *realloc(void *ptr, size_t new_size);
 
 void *__klee_wrapped_malloc(size_t size) {
-  char retNull;
+  unsigned char retNull;
   klee_make_symbolic(&retNull, sizeof(retNull), "retNullMalloc");
   if (retNull) {
     return 0;
@@ -16,7 +16,7 @@ void *__klee_wrapped_malloc(size_t size) {
 }
 
 void *__klee_wrapped_calloc(size_t num, size_t size) {
-  char retNull;
+  unsigned char retNull;
   klee_make_symbolic(&retNull, sizeof(retNull), "retNullCalloc");
   if (retNull) {
     return 0;
@@ -26,7 +26,7 @@ void *__klee_wrapped_calloc(size_t num, size_t size) {
 }
 
 void *__klee_wrapped_realloc(void *ptr, size_t new_size) {
-  char retNull;
+  unsigned char retNull;
   klee_make_symbolic(&retNull, sizeof(retNull), "retNullRealloc");
   if (retNull) {
     return 0;

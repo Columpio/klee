@@ -88,25 +88,31 @@ public:
     std::string OptSuffix;
     std::string MainCurrentName;
     std::string MainNameAfterMock;
+    std::string AnnotationsFile;
     bool Optimize;
     bool Simplify;
     bool CheckDivZero;
     bool CheckOvershift;
+    bool AnnotateOnlyExternal;
     bool WithFPRuntime;
     bool WithPOSIXRuntime;
 
     ModuleOptions(const std::string &_LibraryDir,
                   const std::string &_EntryPoint, const std::string &_OptSuffix,
                   const std::string &_MainCurrentName,
-                  const std::string &_MainNameAfterMock, bool _Optimize,
+                  const std::string &_MainNameAfterMock,
+                  const std::string &_AnnotationsFile, bool _Optimize,
                   bool _Simplify, bool _CheckDivZero, bool _CheckOvershift,
-                  bool _WithFPRuntime, bool _WithPOSIXRuntime)
+                  bool _AnnotateOnlyExternal, bool _WithFPRuntime,
+                  bool _WithPOSIXRuntime)
         : LibraryDir(_LibraryDir), EntryPoint(_EntryPoint),
           OptSuffix(_OptSuffix), MainCurrentName(_MainCurrentName),
-          MainNameAfterMock(_MainNameAfterMock), Optimize(_Optimize),
+          MainNameAfterMock(_MainNameAfterMock),
+          AnnotationsFile(_AnnotationsFile), Optimize(_Optimize),
           Simplify(_Simplify), CheckDivZero(_CheckDivZero),
-          CheckOvershift(_CheckOvershift), WithFPRuntime(_WithFPRuntime),
-          WithPOSIXRuntime(_WithPOSIXRuntime) {}
+          CheckOvershift(_CheckOvershift),
+          AnnotateOnlyExternal(_AnnotateOnlyExternal),
+          WithFPRuntime(_WithFPRuntime), WithPOSIXRuntime(_WithPOSIXRuntime) {}
   };
 
   enum LogType {
@@ -159,10 +165,7 @@ public:
             const std::unordered_set<std::string> &mainModuleGlobals,
             std::unique_ptr<InstructionInfoTable> origInfos,
             const std::set<std::string> &ignoredExternals,
-            const Annotations &annotations) = 0;
-
-  virtual std::map<std::string, llvm::Type *>
-  getAllExternals(const std::set<std::string> &ignoredExternals) = 0;
+            std::vector<std::pair<std::string, std::string>> redefinitions) = 0;
 
   // supply a tree stream writer which the interpreter will use
   // to record the concrete path (as a stream of '0' and '1' bytes).
