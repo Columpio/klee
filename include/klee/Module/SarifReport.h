@@ -117,6 +117,7 @@ struct ResultJson {
   optional<Message> message;
   optional<unsigned> id;
   optional<Fingerprints> fingerprints;
+  optional<std::string> verdict;
   std::vector<LocationJson> locations;
   std::vector<CodeFlowJson> codeFlows;
 };
@@ -158,8 +159,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(CodeFlowJson, threadFlows)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Message, text)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ResultJson, ruleId, message, id,
-                                                fingerprints, codeFlows,
-                                                locations)
+                                                fingerprints, verdict,
+                                                codeFlows, locations)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(DriverJson, name)
 
