@@ -4,7 +4,7 @@ validate_build_config_klee() {
 
 setup_build_variables_klee() {
   source "${DIR}/common-functions"
-  KLEE_SUFFIX="${LLVM_VERSION_SHORT}${SOLVER_SUFFIX}${SANITIZER_SUFFIX}"
+  KLEE_SUFFIX="${LLVM_VERSION_SHORT}${SOLVER_SUFFIX}${SANITIZER_SUFFIX}${KLEE_RUNTIME_BUILD}"
   KLEE_BUILD_DIR="${BASE}/klee_build${KLEE_SUFFIX}"
   KLEE_SRC="$DIR/../../"
 }
@@ -135,16 +135,20 @@ fi
 # KLEE
 ###############################################################################
 
-  if [ "X${DISABLE_ASSERTIONS}" == "X1" ]; then
-    CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=FALSE")
-  else
-    CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=TRUE")
+  if [ -z "${ENABLE_KLEE_ASSERTS}" ]; then
+    if [ "X${DISABLE_ASSERTIONS}" == "X1" ]; then
+      CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=FALSE")
+    else
+      CMAKE_ARGUMENTS+=("-DENABLE_KLEE_ASSERTS=TRUE")
+    fi
   fi
   
-  if [ "X${ENABLE_OPTIMIZED}" == "X1" ]; then
-    CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
-  else
-    CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=Debug")
+  if [ -z "${CMAKE_BUILD_TYPE}" ]; then
+    if [ "X${ENABLE_OPTIMIZED}" == "X1" ]; then
+      CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
+    else
+      CMAKE_ARGUMENTS+=("-DCMAKE_BUILD_TYPE=Debug")
+    fi
   fi
 
   CMAKE_ARGUMENTS+=("-DKLEE_RUNTIME_BUILD_TYPE=${KLEE_RUNTIME_BUILD}")
