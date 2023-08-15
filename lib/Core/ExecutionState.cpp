@@ -123,7 +123,7 @@ InfoStackFrame::InfoStackFrame(const InfoStackFrame &s)
 /***/
 ExecutionState::ExecutionState()
     : initPC(nullptr), pc(nullptr), prevPC(nullptr), incomingBBIndex(-1),
-      depth(0), ptreeNode(nullptr), steppedInstructions(0),
+      depth(0), ptreeNode(nullptr), symbolics(std::make_shared<PList>()), steppedInstructions(0),
       steppedMemoryInstructions(0), instsSinceCovNew(0),
       roundingMode(llvm::APFloat::rmNearestTiesToEven), coveredNew(false),
       forkDisabled(false), prevHistory_(TargetsHistory::create()),
@@ -133,7 +133,7 @@ ExecutionState::ExecutionState()
 
 ExecutionState::ExecutionState(KFunction *kf)
     : initPC(kf->instructions), pc(initPC), prevPC(pc), incomingBBIndex(-1),
-      depth(0), ptreeNode(nullptr), steppedInstructions(0),
+      depth(0), ptreeNode(nullptr), symbolics(std::make_shared<PList>()), steppedInstructions(0),
       steppedMemoryInstructions(0), instsSinceCovNew(0),
       roundingMode(llvm::APFloat::rmNearestTiesToEven), coveredNew(false),
       forkDisabled(false), prevHistory_(TargetsHistory::create()),
@@ -144,7 +144,7 @@ ExecutionState::ExecutionState(KFunction *kf)
 
 ExecutionState::ExecutionState(KFunction *kf, KBlock *kb)
     : initPC(kb->instructions), pc(initPC), prevPC(pc), incomingBBIndex(-1),
-      depth(0), ptreeNode(nullptr), steppedInstructions(0),
+      depth(0), ptreeNode(nullptr), symbolics(std::make_shared<PList>()), steppedInstructions(0),
       steppedMemoryInstructions(0), instsSinceCovNew(0),
       roundingMode(llvm::APFloat::rmNearestTiesToEven), coveredNew(false),
       forkDisabled(false), prevHistory_(TargetsHistory::create()),
@@ -194,8 +194,8 @@ ExecutionState *ExecutionState::branch() {
 }
 
 bool ExecutionState::inSymbolics(const MemoryObject *mo) const {
-  for (auto i : symbolics) {
-    if (mo->id == i.memoryObject->id) {
+  for (auto &symbolic : *symbolics) {
+    if (mo->id == symbolic.memoryObject->id) {
       return true;
     }
   }
@@ -255,13 +255,12 @@ void ExecutionState::popFrame() {
 
 void ExecutionState::addSymbolic(const MemoryObject *mo, const Array *array,
                                  KType *type) {
-  symbolics.emplace_back(ref<const MemoryObject>(mo), array, type);
+  symbolics->emplace_back(mo, array, type);
 }
 
 ref<const MemoryObject>
 ExecutionState::findMemoryObject(const Array *array) const {
-  for (unsigned i = 0; i != symbolics.size(); ++i) {
-    const auto &symbolic = symbolics[i];
+  for (const auto &symbolic : *symbolics) {
     if (array == symbolic.array) {
       return symbolic.memoryObject;
     }
@@ -368,7 +367,7 @@ bool ExecutionState::resolveOnSymbolics(const ref<ConstantExpr> &addr,
                                         IDType &result) const {
   uint64_t address = addr->getZExtValue();
 
-  for (const auto &res : symbolics) {
+  for (const auto &res : *symbolics) {
     const auto &mo = res.memoryObject;
     // Check if the provided address is between start and end of the object
     // [mo->address, mo->address + mo->size) or the object is a 0-sized object.
