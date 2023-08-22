@@ -25,6 +25,7 @@ std::string ReproduceErrorTarget::toString() const {
   repr << "Target " << getId() << ": ";
   repr << "error in ";
   repr << block->toString();
+  repr << "(in fact in " << loc.toString() << ")";
   return repr.str();
 }
 
