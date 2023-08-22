@@ -36,6 +36,7 @@ void TargetManager::updateContinue(ExecutionState &state, ref<Target> target) {}
 void TargetManager::updateDone(ExecutionState &state, ref<Target> target) {
   auto &stateTargetForest = targetForest(state);
 
+  llvm::errs() << "s " << state.id << " REACHED target: " << target->toString() << "\n";
   stateTargetForest.stepTo(target);
   setTargets(state, stateTargetForest.getTargets());
   setHistory(state, stateTargetForest.getHistory());

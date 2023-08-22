@@ -351,7 +351,7 @@ public:
     counter = 0;
     updateCounter = 0;
     hasScan = false;
-    forceNoLineBreaks = false;
+    forceNoLineBreaks = true;
     bindings.clear();
     updateBindings.clear();
     couldPrint.clear();

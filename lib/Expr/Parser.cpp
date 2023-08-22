@@ -491,7 +491,7 @@ SourceResult ParserImpl::ParseSource() {
     source = ParseSymbolicSizeConstantAddressSource();
   } else if (type == "makeSymbolic") {
     source = ParseMakeSymbolicSource();
-  } else if (type == "lazyInitializationContent") {
+  } else if (type == "lic") {
     source = ParseLazyInitializationContentSource();
   } else if (type == "lazyInitializationAddress") {
     source = ParseLazyInitializationAddressSource();

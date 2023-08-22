@@ -441,6 +441,8 @@ private:
   /// if ifTrueBlock == ifFalseBlock, then fork is internal
   StatePair fork(ExecutionState &current, ref<Expr> condition,
                  KBlock *ifTrueBlock, KBlock *ifFalseBlock, BranchType reason);
+  StatePair fork1(ExecutionState &current, ref<Expr> condition,
+                  KBlock *ifTrueBlock, KBlock *ifFalseBlock, BranchType reason);
   StatePair forkInternal(ExecutionState &current, ref<Expr> condition,
                          BranchType reason);
 

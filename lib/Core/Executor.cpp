@@ -1156,6 +1156,26 @@ bool Executor::canReachSomeTargetFromBlock(ExecutionState &es, KBlock *block) {
 Executor::StatePair Executor::fork(ExecutionState &current, ref<Expr> condition,
                                    KBlock *ifTrueBlock, KBlock *ifFalseBlock,
                                    BranchType reason) {
+  Executor::StatePair result =
+      fork1(current, condition, ifTrueBlock, ifFalseBlock, reason);
+  if (ifTrueBlock == ifFalseBlock)
+    return result;
+  auto id1 = (result.first ? result.first->id : 0);
+  auto id2 = (result.second ? result.second->id : 0);
+  if ((condition->isTrue() || condition->isFalse()) && !(id1 == 0 && id2 == 0))
+    return result;
+  llvm::errs() << "fork(" << condition->toString();
+  if (ifTrueBlock != ifFalseBlock) {
+    llvm::errs() << ", " << ifTrueBlock->getFirstInstruction()->getLine()
+                 << ", " << ifFalseBlock->getFirstInstruction()->getLine();
+  }
+  llvm::errs() << ") = (" << id1 << ", " << id2 << ")\n";
+  return result;
+}
+
+Executor::StatePair Executor::fork1(ExecutionState &current,
+                                    ref<Expr> condition, KBlock *ifTrueBlock,
+                                    KBlock *ifFalseBlock, BranchType reason) {
   bool isInternal = ifTrueBlock == ifFalseBlock;
   std::map<ExecutionState *, std::vector<SeedInfo>>::iterator it =
       seedMap.find(&current);
@@ -1908,6 +1928,12 @@ ref<klee::ConstantExpr> Executor::getEhTypeidFor(ref<Expr> type_info) {
 
 void Executor::executeCall(ExecutionState &state, KInstruction *ki, Function *f,
                            std::vector<ref<Expr>> &arguments) {
+  if (f) {
+    llvm::errs() << "s " << state.id << " call " << f->getName() << "( ";
+    for (auto &arg : arguments)
+      llvm::errs() << arg->toString() << ", ";
+    llvm::errs() << ")\n";
+  }
   Instruction *i = ki->inst;
   if (isa_and_nonnull<DbgInfoIntrinsic>(i))
     return;
@@ -2439,6 +2465,23 @@ void Executor::checkNullCheckAfterDeref(ref<Expr> cond, ExecutionState &state,
 
 void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
   Instruction *i = ki->inst;
+  // bool ok = true;
+  bool ok = (ki->getSourceFilepath().substr(0, 5) != "libc/" &&
+             ki->getSourceFilepath().substr(0, 8) != "runtime/" &&
+             ki->getSourceFilepath().substr(0, 5) != "klee/");
+  if (ok) {
+    Statistic *S = theStatisticManager->getStatisticByName("Instructions");
+    int64_t instructions = S ? S->getValue() : 0;
+    llvm::errs() << "i " << instructions << "; "
+                 << "s " << state.id << "; "
+                 << "t "
+                 << std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count()
+                 << "; " << ki->getSourceLocationString() << "$";
+    i->print(llvm::errs());
+    llvm::errs() << '\n';
+  }
 
   if (guidanceKind == GuidanceKind::ErrorGuidance) {
     for (auto kvp : state.targetForest) {
@@ -2464,6 +2507,8 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
     if (!isVoidReturn) {
       result = eval(ki, 0, state).value;
+      llvm::errs() << ki->parent->parent->getName() << " ret "
+                   << result->toString() << "\n";
     }
 
     if (state.stack.size() <= 1) {
@@ -4276,6 +4321,7 @@ void Executor::reportProgressTowardsTargets() const {
 }
 
 void Executor::run(std::vector<ExecutionState *> initialStates) {
+  llvm::errs() << "Starting in Executor::run\n";
   // Delay init till now so that ticks don't accrue during optimization and
   // such.
   if (guidanceKind != GuidanceKind::ErrorGuidance)
@@ -6658,6 +6704,7 @@ void Executor::runFunctionAsMain(Function *f, int argc, char **argv,
       state->popFrame();
     }
 
+    llvm::errs() << "Before state preparation in Executor::runFunctionAsMain\n";
     for (auto &startFunctionAndWhiteList : prepTargets) {
       auto kf =
           kmodule->functionMap.at(startFunctionAndWhiteList.first->function);

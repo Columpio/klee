@@ -259,9 +259,7 @@ public:
   LazyInitializationContentSource(ref<Expr> pointer)
       : LazyInitializationSource(pointer) {}
   Kind getKind() const override { return Kind::LazyInitializationContent; }
-  virtual std::string getName() const override {
-    return "lazyInitializationContent";
-  }
+  virtual std::string getName() const override { return "lic"; }
 
   static bool classof(const SymbolicSource *S) {
     return S->getKind() == Kind::LazyInitializationContent;

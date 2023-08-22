@@ -1509,6 +1509,11 @@ void mockLinkedExternals(
 }
 
 int main(int argc, char **argv, char **envp) {
+  llvm::errs() << "Start time: "
+               << std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count()
+               << "\n";
   if (theInterpreter) {
     theInterpreter = nullptr;
   }
@@ -1934,9 +1939,11 @@ int main(int argc, char **argv, char **envp) {
   // Get the desired main function.  klee_main initializes uClibc
   // locale and other data and then calls main.
 
+  llvm::errs() << "Before setModule\n";
   auto finalModule = interpreter->setModule(
       loadedUserModules, loadedLibsModules, Opts, mainModuleFunctions,
       mainModuleGlobals, std::move(origInstructions), ignoredExternals, redefinitions);
+  llvm::errs() << "After setModule\n";
   Function *mainFn = finalModule->getFunction(EntryPoint);
   if (!mainFn) {
     klee_error("Entry function '%s' not found in module.", EntryPoint.c_str());
