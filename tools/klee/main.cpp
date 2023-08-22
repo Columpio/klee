@@ -48,6 +48,7 @@ DISABLE_WARNING_DEPRECATED_DECLARATIONS
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "klee/Module/InstructionInfoTable.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 DISABLE_WARNING_POP
@@ -64,6 +65,7 @@ DISABLE_WARNING_POP
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <llvm/IR/InstIterator.h>
 #include <sstream>
 
 using json = nlohmann::json;
@@ -703,13 +705,13 @@ void KleeHandler::processTestCase(const ExecutionState &state,
   }
 
   if (WriteCov) {
-    std::map<const std::string *, std::set<unsigned>> cov;
+    std::map<std::string, std::set<size_t>> cov;
     m_interpreter->getCoveredLines(state, cov);
     auto f = openTestFile("cov", id);
     if (f) {
       for (const auto &entry : cov) {
         for (const auto &line : entry.second) {
-          *f << *entry.first << ':' << line << '\n';
+          *f << entry.first << ':' << line << '\n';
         }
       }
     }
@@ -1232,7 +1234,7 @@ createLibCWrapper(std::vector<std::unique_ptr<llvm::Module>> &userModules,
   args.push_back(llvm::ConstantExpr::getBitCast(
       cast<llvm::Constant>(inModuleReference.getCallee()),
       ft->getParamType(0)));
-  args.push_back(&*(stub->arg_begin())); // argc
+  args.push_back(&*(stub->arg_begin()));                       // argc
   auto arg_it = stub->arg_begin();
   args.push_back(&*(++arg_it));                                // argv
   args.push_back(Constant::getNullValue(ft->getParamType(3))); // app_init
@@ -1618,13 +1620,19 @@ int main(int argc, char **argv, char **envp) {
   }
 
   llvm::Module *mainModule = loadedUserModules.front().get();
-  std::unique_ptr<InstructionInfoTable> origInfos;
-  std::unique_ptr<llvm::raw_fd_ostream> assemblyFS;
+  KModule::FInstructions origInstructions;
 
   if (UseGuidedSearch == Interpreter::GuidanceKind::ErrorGuidance) {
+    for (const auto &Func : *mainModule) {
+      for (const auto &instr : llvm::instructions(Func)) {
+        auto locationInfo = getLocationInfo(&instr);
+        origInstructions[locationInfo.file][locationInfo.line]
+                        [locationInfo.column]
+                            .insert(instr.getOpcode());
+      }
+    }
+
     std::vector<llvm::Type *> args;
-    origInfos = std::make_unique<InstructionInfoTable>(
-        *mainModule, std::move(assemblyFS), true);
     args.push_back(llvm::Type::getInt32Ty(ctx)); // argc
     args.push_back(llvm::PointerType::get(
         Type::getInt8PtrTy(ctx),
@@ -1643,15 +1651,17 @@ int main(int argc, char **argv, char **envp) {
     EntryPoint = stubEntryPoint;
   }
 
-  std::unordered_set<std::string> mainModuleFunctions;
+  //change to StringRef
+  std::set<std::string> mainModuleFunctions;
   for (auto &Function : *mainModule) {
     if (!Function.isDeclaration()) {
       mainModuleFunctions.insert(Function.getName().str());
     }
   }
-  std::unordered_set<std::string> mainModuleGlobals;
-  for (const auto &gv : mainModule->globals())
+  std::set<std::string> mainModuleGlobals;
+  for (const auto &gv : mainModule->globals()) {
     mainModuleGlobals.insert(gv.getName().str());
+  }
 
   const std::string &module_triple = mainModule->getTargetTriple();
   std::string host_triple = llvm::sys::getDefaultTargetTriple();
@@ -1926,7 +1936,7 @@ int main(int argc, char **argv, char **envp) {
 
   auto finalModule = interpreter->setModule(
       loadedUserModules, loadedLibsModules, Opts, mainModuleFunctions,
-      mainModuleGlobals, std::move(origInfos), ignoredExternals, redefinitions);
+      mainModuleGlobals, std::move(origInstructions), ignoredExternals, redefinitions);
   Function *mainFn = finalModule->getFunction(EntryPoint);
   if (!mainFn) {
     klee_error("Entry function '%s' not found in module.", EntryPoint.c_str());

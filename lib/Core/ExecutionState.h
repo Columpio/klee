@@ -216,7 +216,7 @@ struct Symbolic {
   const Array *array;
   KType *type;
   Symbolic(ref<const MemoryObject> mo, const Array *a, KType *t)
-      : memoryObject(mo), array(a), type(t) {}
+      : memoryObject(std::move(mo)), array(a), type(t) {}
   Symbolic &operator=(const Symbolic &other) = default;
 
   friend bool operator==(const Symbolic &lhs, const Symbolic &rhs) {
@@ -308,7 +308,7 @@ struct MemorySubobject {
   ref<Expr> address;
   unsigned size;
   MemorySubobject(ref<Expr> address, unsigned size)
-      : address(address), size(size) {}
+      : address(std::move(address)), size(size) {}
   MemorySubobject &operator=(const MemorySubobject &other) = default;
 };
 
@@ -397,8 +397,10 @@ public:
   /// taken to reach/create this state
   TreeOStream symPathOS;
 
+
   /// @brief Set containing which lines in which files are covered by this state
-  std::map<const std::string *, std::set<std::uint32_t>> coveredLines;
+  // TODO change to StringRef
+  std::map<std::string, std::set<size_t>> coveredLines;
 
   /// @brief Pointer to the process tree of the current state
   /// Copies of ExecutionState should not copy ptreeNode

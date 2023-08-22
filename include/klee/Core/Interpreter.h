@@ -11,17 +11,18 @@
 
 #include "TerminationTypes.h"
 #include "klee/Module/Annotation.h"
-
 #include "klee/Module/SarifReport.h"
 
 #include <cstdint>
-#include <map>
 #include <memory>
+#include <map>
 #include <set>
-#include <string>
+#include <unordered_set>
 #include <unordered_map>
+#include <string>
 #include <vector>
 
+#include "llvm/ADT/StringRef.h"
 #include <nonstd/optional.hpp>
 
 using nonstd::optional;
@@ -62,6 +63,12 @@ public:
   virtual void processTestCase(const ExecutionState &state, const char *message,
                                const char *suffix, bool isError = false) = 0;
 };
+
+// TODO remove
+using FInstructions = std::unordered_map<
+    std::string,
+    std::unordered_map<
+        unsigned, std::unordered_map<unsigned, std::unordered_set<unsigned>>>>;
 
 enum class MockStrategy {
   None,          // No mocks are generated
@@ -161,9 +168,9 @@ public:
   setModule(std::vector<std::unique_ptr<llvm::Module>> &userModules,
             std::vector<std::unique_ptr<llvm::Module>> &libsModules,
             const ModuleOptions &opts,
-            const std::unordered_set<std::string> &mainModuleFunctions,
-            const std::unordered_set<std::string> &mainModuleGlobals,
-            std::unique_ptr<InstructionInfoTable> origInfos,
+            std::set<std::string> &mainModuleFunctions,
+            std::set<std::string> &mainModuleGlobals,
+            FInstructions &&origInstructions,
             const std::set<std::string> &ignoredExternals,
             std::vector<std::pair<std::string, std::string>> redefinitions) = 0;
 
@@ -217,7 +224,7 @@ public:
 
   virtual void
   getCoveredLines(const ExecutionState &state,
-                  std::map<const std::string *, std::set<unsigned>> &res) = 0;
+                  std::map<std::string, std::set<size_t>> &res) = 0;
 
   virtual void getBlockPath(const ExecutionState &state,
                             std::string &blockPath) = 0;

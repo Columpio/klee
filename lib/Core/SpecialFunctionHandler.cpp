@@ -1001,8 +1001,8 @@ void SpecialFunctionHandler::handleMakeMock(ExecutionState &state,
                                      executor.updateNameVersion(state, name));
         break;
       case MockStrategy::Deterministic:
-        std::vector<ref<Expr>> args(kf->numArgs);
-        for (size_t i = 0; i < kf->numArgs; i++) {
+        std::vector<ref<Expr>> args(kf->getNumArgs());
+        for (size_t i = 0; i < kf->getNumArgs(); i++) {
           args[i] = executor.getArgumentCell(state, kf, i).value;
         }
         source = SourceBuilder::mockDeterministic(executor.kmodule.get(),

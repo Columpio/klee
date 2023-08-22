@@ -99,13 +99,13 @@ bool CallStackFrame::equals(const CallStackFrame &other) const {
 }
 
 StackFrame::StackFrame(KFunction *kf) : kf(kf), varargs(0) {
-  locals = new Cell[kf->numRegisters];
+  locals = new Cell[kf->getNumRegisters()];
 }
 
 StackFrame::StackFrame(const StackFrame &s)
     : kf(s.kf), allocas(s.allocas), varargs(s.varargs) {
-  locals = new Cell[kf->numRegisters];
-  for (unsigned i = 0; i < kf->numRegisters; i++)
+  locals = new Cell[kf->getNumRegisters()];
+  for (unsigned i = 0; i < kf->getNumRegisters(); i++)
     locals[i] = s.locals[i];
 }
 
@@ -407,13 +407,14 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
     const StackFrame &sf = stack.valueStack().at(ri);
 
     Function *f = csf.kf->function;
-    const InstructionInfo &ii = *target->info;
+//    const InstructionInfo &ii = *target->info;
     out << "\t#" << i;
-    if (ii.assemblyLine.hasValue()) {
-      std::stringstream AssStream;
-      AssStream << std::setw(8) << std::setfill('0')
-                << ii.assemblyLine.getValue();
-      out << AssStream.str();
+    auto assemblyLine = target->getKModule()->getAsmLine(target->inst);
+    if (assemblyLine.has_value()) {
+      std::stringstream AsmStream;
+      AsmStream << std::setw(8) << std::setfill('0')
+                << assemblyLine.value();
+      out << AsmStream.str();
     }
     out << " in " << f->getName().str() << "(";
     // Yawn, we could go up and print varargs if we wanted to.
@@ -434,8 +435,9 @@ void ExecutionState::dumpStack(llvm::raw_ostream &out) const {
       }
     }
     out << ")";
-    if (ii.file != "")
-      out << " at " << ii.file << ":" << ii.line;
+    std::string filepath = target->getSourceFilepath();
+    if (!filepath.empty())
+      out << " at " << filepath << ":" << target->getLine();
     out << "\n";
     target = csf.caller;
   }

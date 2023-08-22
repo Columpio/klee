@@ -121,8 +121,9 @@ tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
   }
 }
 
-void
-tryConvertMessage(const std::string &toolName, const optional<Message> &errorMessage, ref<Location> &loc) {
+void tryConvertMessage(const std::string &toolName,
+                       const optional<Message> &errorMessage,
+                       ref<Location> &loc) {
   if (toolName != "Cooddy" || !errorMessage.has_value())
     return;
   std::string start = "Dereferencing of \"";
@@ -341,13 +342,14 @@ bool Location::isInside(const std::string &name) const {
                                      : (m == -1 && isOSSeparator(filename[n])));
 }
 
-void Location::isInside(InstrWithPrecision &kp, const Instructions &origInsts) const {
+void Location::isInside(InstrWithPrecision &kp,
+                        const Instructions &origInsts) const {
   auto ki = kp.ptr;
-  auto inst = ki->info;
-  if (!isa<DbgInfoIntrinsic>(ki->inst) && startLine <= inst->line && inst->line <= endLine) {
+  if (!isa<DbgInfoIntrinsic>(ki->inst) && startLine <= ki->getLine() &&
+      ki->getLine() <= endLine) {
     auto opCode = ki->inst->getOpcode();
-    if (*startColumn <= inst->column && inst->column <= *endColumn &&
-        origInsts.at(inst->line).at(inst->column).count(opCode) != 0)
+    if (*startColumn <= ki->getColumn() && ki->getColumn() <= *endColumn &&
+        origInsts.at(ki->getLine()).at(ki->getColumn()).count(opCode) != 0)
       kp.precision = Precision::ColumnLevel;
     else
       kp.precision = Precision::LineLevel;
@@ -357,9 +359,9 @@ void Location::isInside(InstrWithPrecision &kp, const Instructions &origInsts) c
 
 void Location::isInside(BlockWithPrecision &bp, const Instructions &origInsts) {
   if (!startColumn.has_value()) {
-    auto first = bp.ptr->getFirstInstruction()->info;
-    auto last = bp.ptr->getLastInstruction()->info;
-    if (first->line <= endLine && startLine <= last->line)
+    auto firstKi = bp.ptr->getFirstInstruction();
+    auto lastKi = bp.ptr->getLastInstruction();
+    if (firstKi->getLine() <= endLine && startLine <= lastKi->getLine())
       bp.precision = Precision::LineLevel;
     else
       bp.setNotFound();
@@ -377,7 +379,8 @@ void Location::isInside(BlockWithPrecision &bp, const Instructions &origInsts) {
   }
 }
 
-void CoodyNPELocation::isInside(BlockWithPrecision &bp, const Instructions &origInsts) {
+void CoodyNPELocation::isInside(BlockWithPrecision &bp,
+                                const Instructions &origInsts) {
   // if (x + y > z && aaa->bbb->ccc->ddd)
   // ^^^^^^^^^^^^^^^^^ first, skip all this
   // second skip this ^^^^^^^^ (where Cooddy event points)
@@ -391,11 +394,11 @@ void CoodyNPELocation::isInside(BlockWithPrecision &bp, const Instructions &orig
     ki = block->instructions[start];
     InstrWithPrecision kp(ki);
     Location::isInside(kp, origInsts);
-    if (kp.precision >= precision) {  // first: go until Cooddy event
+    if (kp.precision >= precision) { // first: go until Cooddy event
       precision = kp.precision;
-      if (!inside)                    // first: reached Cooddy event
+      if (!inside)                   // first: reached Cooddy event
         inside = true;
-    } else if (inside)                // second: skip until left Coody event
+    } else if (inside)               // second: skip until left Coody event
       break;
   }
   if (!inside) { // no Cooddy event in this Block
@@ -409,8 +412,8 @@ void CoodyNPELocation::isInside(BlockWithPrecision &bp, const Instructions &orig
   // finally: Load instruction
   if (ki->inst->getOpcode() == Instruction::Load) {
     // we got precise instruction, so redefine the location
-    startLine = (endLine = ki->info->line);
-    startColumn = (endColumn = ki->info->column);
+    startLine = (endLine = ki->getLine());
+    startColumn = (endColumn = ki->getColumn());
     bp.precision = Precision::ColumnLevel;
     return;
   }

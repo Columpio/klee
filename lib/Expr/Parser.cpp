@@ -623,8 +623,8 @@ SourceResult ParserImpl::ParseMockDeterministicSource() {
   ConsumeExpectedToken(Token::Identifier);
   ConsumeLParen();
   std::vector<ref<Expr>> args;
-  args.reserve(kf->numArgs);
-  for (unsigned i = 0; i < kf->numArgs; i++) {
+  args.reserve(kf->getNumArgs());
+  for (unsigned i = 0; i < kf->getNumArgs(); i++) {
     auto expr = ParseExpr(TypeResult());
     if (!expr.isValid()) {
       return {false, nullptr};
