@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "klee/ADT/Ref.h"
+#include "klee/Module/KInstruction.h"
 #include <nlohmann/json.hpp>
 #include <nonstd/optional.hpp>
 
@@ -165,6 +166,29 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RunJson, results, tool)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SarifReportJson, runs)
 
+enum class Precision {
+  NotFound = 0,
+  LineLevel = 1,
+  ColumnLevel = 2
+};
+
+template <class T>
+struct WithPrecision {
+  T *ptr;
+  Precision precision;
+
+  explicit WithPrecision(T *p, Precision pr) : ptr(p), precision(pr) {}
+  explicit WithPrecision(T *p) : WithPrecision(p, Precision::NotFound) {}
+  explicit WithPrecision() : WithPrecision(nullptr) {}
+
+  void setNotFound() {
+    ptr = nullptr;
+    precision = Precision::NotFound;
+  }
+};
+using BlockWithPrecision = WithPrecision<KBlock>;
+using InstrWithPrecision = WithPrecision<KInstruction>;
+
 struct Location {
   struct LocationHash {
     std::size_t operator()(const Location *l) const { return l->hash(); }
@@ -194,7 +218,7 @@ struct Location {
                               optional<unsigned int> startColumn_,
                               optional<unsigned int> endColumn_);
 
-  ~Location();
+  virtual ~Location();
   std::size_t hash() const { return hashValue; }
 
   /// @brief Required by klee::ref-managed objects
@@ -212,7 +236,9 @@ struct Location {
       unsigned int,
       std::unordered_map<unsigned int, std::unordered_set<unsigned int>>>;
 
-  bool isInside(KBlock *block, const Instructions &origInsts) const;
+  void isInside(InstrWithPrecision &kp, const Instructions &origInsts) const;
+
+  virtual void isInside(BlockWithPrecision &bp, const Instructions &origInsts);
 
   std::string toString() const;
 
@@ -248,6 +274,11 @@ private:
         endColumn(endColumn_.has_value() ? endColumn_ : startColumn_) {
     computeHash();
   }
+};
+
+struct CoodyNPELocation : public Location {
+  CoodyNPELocation(const Location &loc) : Location(loc) {}
+  void isInside(BlockWithPrecision &bp, const Instructions &origInsts) override;
 };
 
 struct RefLocationHash {

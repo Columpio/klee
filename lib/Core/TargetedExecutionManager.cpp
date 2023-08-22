@@ -321,6 +321,8 @@ TargetedExecutionManager::prepareAllLocations(KModule *kmodule,
   const auto &infos = kmodule->infos;
   for (auto it = locations.begin(); it != locations.end(); ++it) {
     auto loc = *it;
+    auto precision = Precision::LineLevel;
+    Blocks blocks;
     for (const auto &fileName : infos->getFilesNames()) {
       if (kmodule->origInfos.count(fileName) == 0) {
         continue;
@@ -338,14 +340,22 @@ TargetedExecutionManager::prepareAllLocations(KModule *kmodule,
         const auto &origInstsInFile = kmodule->origInfos.at(fi.file);
 
         for (const auto &kblock : kfunc->blocks) {
-          auto b = kblock.get();
-          if (!loc->isInside(b, origInstsInFile)) {
+          BlockWithPrecision bp(kblock.get(), precision);
+          loc->isInside(bp, origInstsInFile);
+          if (bp.precision < precision) {
             continue;
+          } else if (bp.precision == precision) {
+            blocks.insert(bp.ptr);
+          } else {
+            blocks.clear();
+            blocks.insert(bp.ptr);
+            precision = bp.precision;
           }
-          locToBlocks[loc].insert(b);
         }
       }
     }
+    if (!blocks.empty())
+      locToBlocks.emplace(loc, std::move(blocks));
   }
 
   return locToBlocks;
