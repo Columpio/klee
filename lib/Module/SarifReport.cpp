@@ -25,6 +25,15 @@ using namespace klee;
 namespace {
 bool isOSSeparator(char c) { return c == '/' || c == '\\'; }
 
+enum class ToolName {
+  Unknown = 0,
+  SecB,
+  clang,
+  CppCheck,
+  Infer,
+  Cooddy
+};
+
 optional<ref<Location>>
 tryConvertLocationJson(const LocationJson &locationJson) {
   const auto &physicalLocation = locationJson.physicalLocation;
@@ -50,9 +59,10 @@ tryConvertLocationJson(const LocationJson &locationJson) {
 }
 
 std::vector<ReachWithError>
-tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
+tryConvertRuleJson(const std::string &ruleId, ToolName toolName,
                    const optional<Message> &errorMessage) {
-  if (toolName == "SecB") {
+  switch (toolName) {
+  case ToolName::SecB:
     if ("NullDereference" == ruleId) {
       return {ReachWithError::MustBeNullPointerException};
     } else if ("CheckAfterDeref" == ruleId) {
@@ -63,10 +73,9 @@ tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
       return {ReachWithError::UseAfterFree};
     } else if ("Reached" == ruleId) {
       return {ReachWithError::Reachable};
-    } else {
-      return {};
     }
-  } else if (toolName == "clang") {
+    return {};
+  case ToolName::clang:
     if ("core.NullDereference" == ruleId) {
       return {ReachWithError::MayBeNullPointerException,
               ReachWithError::MustBeNullPointerException};
@@ -84,28 +93,25 @@ tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
       }
     } else if ("core.Reach" == ruleId) {
       return {ReachWithError::Reachable};
-    } else {
-      return {};
     }
-  } else if (toolName == "CppCheck") {
+    return {};
+  case ToolName::CppCheck:
     if ("nullPointer" == ruleId || "ctunullpointer" == ruleId) {
       return {ReachWithError::MayBeNullPointerException,
               ReachWithError::MustBeNullPointerException}; // TODO: check it out
     } else if ("doubleFree" == ruleId) {
       return {ReachWithError::DoubleFree};
-    } else {
-      return {};
     }
-  } else if (toolName == "Infer") {
+    return {};
+  case ToolName::Infer:
     if ("NULL_DEREFERENCE" == ruleId || "NULLPTR_DEREFERENCE" == ruleId) {
       return {ReachWithError::MayBeNullPointerException,
               ReachWithError::MustBeNullPointerException}; // TODO: check it out
     } else if ("USE_AFTER_DELETE" == ruleId || "USE_AFTER_FREE" == ruleId) {
       return {ReachWithError::UseAfterFree, ReachWithError::DoubleFree};
-    } else {
-      return {};
     }
-  } else if (toolName == "Cooddy") {
+    return {};
+  case ToolName::Cooddy:
     if ("NULL.DEREF" == ruleId || "NULL.UNTRUSTED.DEREF" == ruleId) {
       return {ReachWithError::MayBeNullPointerException,
               ReachWithError::MustBeNullPointerException};
@@ -113,18 +119,17 @@ tryConvertRuleJson(const std::string &ruleId, const std::string &toolName,
       return {ReachWithError::DoubleFree};
     } else if ("MEM.USE.FREE" == ruleId) {
       return {ReachWithError::UseAfterFree};
-    } else {
-      return {};
     }
-  } else {
+    return {};
+  case ToolName::Unknown:
     return {};
   }
 }
 
-void tryConvertMessage(const std::string &toolName,
+void tryConvertMessage(ToolName toolName,
                        const optional<Message> &errorMessage,
                        ref<Location> &loc) {
-  if (toolName != "Cooddy" || !errorMessage.has_value())
+  if (toolName != ToolName::Cooddy || !errorMessage.has_value())
     return;
   std::string start = "Dereferencing of \"";
   std::string end = "\" which can be null";
@@ -138,7 +143,7 @@ void tryConvertMessage(const std::string &toolName,
 }
 
 optional<Result> tryConvertResultJson(const ResultJson &resultJson,
-                                      const std::string &toolName,
+                                      ToolName toolName,
                                       const std::string &id) {
   std::vector<ReachWithError> errors = {};
   if (!resultJson.ruleId.has_value()) {
@@ -256,9 +261,9 @@ public:
   void getNextId(const klee::ResultJson &resultJson) override { id++; }
 };
 
-TraceId *createTraceId(const std::string &toolName,
+TraceId *createTraceId(ToolName toolName,
                        const std::vector<klee::ResultJson> &results) {
-  if (toolName == "Cooddy")
+  if (toolName == ToolName::Cooddy)
     return new CooddyTraceId();
   else if (results.size() > 0 && results[0].id.has_value())
     return new GetterTraceId();
@@ -267,11 +272,25 @@ TraceId *createTraceId(const std::string &toolName,
 
 void setResultId(const ResultJson &resultJson, bool useProperId, unsigned &id) {
   if (useProperId) {
-    assert(resultJson.id.has_value() && "all results must have an proper id");
+    assert(resultJson.id.has_value() && "all results must have a proper id");
     id = resultJson.id.value();
   } else {
     ++id;
   }
+}
+
+ToolName convertToolName(const std::string &toolName) {
+  if ("SecB" == toolName)
+    return ToolName::SecB;
+  if ("clang" == toolName)
+    return ToolName::clang;
+  if ("CppCheck" == toolName)
+    return ToolName::CppCheck;
+  if ("Infer" == toolName)
+    return ToolName::Infer;
+  if ("Cooddy" == toolName)
+    return ToolName::Cooddy;
+  return ToolName::Unknown;
 }
 
 SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
@@ -284,7 +303,7 @@ SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
   assert(reportJson.runs.size() == 1);
 
   const RunJson &run = reportJson.runs[0];
-  const std::string toolName = run.tool.driver.name;
+  auto toolName = convertToolName(run.tool.driver.name);
 
   TraceId *id = createTraceId(toolName, run.results);
 
