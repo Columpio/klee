@@ -30,7 +30,7 @@ ty min(ty left, ty right);
 }; // namespace confidence
 
 void reportFalsePositive(confidence::ty confidence,
-                         const std::vector<ReachWithError> &errors,
+                         const ReachWithErrors &errors,
                          const std::string &id, std::string whatToIncrease);
 
 } // namespace klee

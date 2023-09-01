@@ -119,8 +119,7 @@ void TargetForest::Layer::addTrace(
       if (i == result.locations.size() - 1) {
         target = ReproduceErrorTarget::create(
             result.errors, result.id,
-            ErrorLocation{loc->startLine, loc->endLine, loc->startColumn,
-                          loc->endColumn},
+            loc->range->getRange(),
             block);
       } else {
         target = ReachBlockTarget::create(block);

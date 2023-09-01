@@ -36,13 +36,6 @@ DISABLE_WARNING_POP
 namespace klee {
 using nonstd::optional;
 
-struct ErrorLocation {
-  unsigned int startLine;
-  unsigned int endLine;
-  optional<unsigned int> startColumn;
-  optional<unsigned int> endColumn;
-};
-
 class ReproduceErrorTarget;
 
 class Target {
@@ -171,23 +164,23 @@ public:
 
 class ReproduceErrorTarget : public Target {
 private:
-  std::vector<ReachWithError>
+  ReachWithErrors
       errors;        // None - if it is not terminated in error trace
   std::string id;    // "" - if it is not terminated in error trace
-  ErrorLocation loc; // TODO(): only for check in reportTruePositive
+  LineColumnRange loc; // TODO(): only for check in reportTruePositive
 
 protected:
-  explicit ReproduceErrorTarget(const std::vector<ReachWithError> &_errors,
-                                const std::string &_id, ErrorLocation _loc,
+  explicit ReproduceErrorTarget(const ReachWithErrors &_errors,
+                                const std::string &_id, LineColumnRange _loc,
                                 KBlock *_block)
-      : Target(_block), errors(_errors), id(_id), loc(_loc) {
+      : Target(_block), errors(_errors), id(_id), loc(std::move(_loc)) {
     assert(errors.size() > 0);
     std::sort(errors.begin(), errors.end());
   }
 
 public:
-  static ref<Target> create(const std::vector<ReachWithError> &_errors,
-                            const std::string &_id, ErrorLocation _loc,
+  static ref<Target> create(const ReachWithErrors &_errors,
+                            const std::string &_id, LineColumnRange _loc,
                             KBlock *_block);
 
   Kind getKind() const override { return Kind::ReproduceError; }
@@ -204,12 +197,12 @@ public:
 
   bool isReported = false;
 
-  const std::vector<ReachWithError> &getErrors() const { return errors; }
+  const ReachWithErrors &getErrors() const { return errors; }
   bool isThatError(ReachWithError err) const {
     return std::find(errors.begin(), errors.end(), err) != errors.end();
   }
 
-  bool isTheSameAsIn(const KInstruction *instr) const;
+  bool isTheSameAsIn(KInstruction *instr) const;
 };
 } // namespace klee
 

@@ -17,6 +17,7 @@
 
 #include "klee/ADT/Ref.h"
 #include "klee/Module/KInstruction.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include <nlohmann/json.hpp>
 #include <nonstd/optional.hpp>
 
@@ -53,9 +54,10 @@ enum ReachWithError {
   Reachable,
   None,
 };
+using ReachWithErrors = std::vector<ReachWithError>;
 
 const char *getErrorString(ReachWithError error);
-std::string getErrorsString(const std::vector<ReachWithError> &errors);
+std::string getErrorsString(const ReachWithErrors &errors);
 
 struct FunctionInfo;
 struct KBlock;
@@ -64,11 +66,16 @@ struct ArtifactLocationJson {
   optional<std::string> uri;
 };
 
+struct Message {
+  std::string text;
+};
+
 struct RegionJson {
   optional<unsigned int> startLine;
   optional<unsigned int> endLine;
   optional<unsigned int> startColumn;
   optional<unsigned int> endColumn;
+  optional<Message> message;
 };
 
 struct PhysicalLocationJson {
@@ -91,10 +98,6 @@ struct ThreadFlowJson {
 
 struct CodeFlowJson {
   std::vector<ThreadFlowJson> threadFlows;
-};
-
-struct Message {
-  std::string text;
 };
 
 struct Fingerprints {
@@ -138,7 +141,7 @@ struct SarifReportJson {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ArtifactLocationJson, uri)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RegionJson, startLine, endLine,
-                                                startColumn, endColumn)
+                                                startColumn, endColumn, message)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PhysicalLocationJson,
                                                 artifactLocation, region)
@@ -168,8 +171,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(SarifReportJson, runs)
 
 enum class Precision {
   NotFound = 0,
-  LineLevel = 1,
-  ColumnLevel = 2
+  Line = 1,
+  Column = 2,
+  Instruction = 3
 };
 
 template <class T>
@@ -182,12 +186,167 @@ struct WithPrecision {
   explicit WithPrecision() : WithPrecision(nullptr) {}
 
   void setNotFound() {
-    ptr = nullptr;
     precision = Precision::NotFound;
+  }
+  bool isNotFound() const {
+    return precision == Precision::NotFound;
   }
 };
 using BlockWithPrecision = WithPrecision<KBlock>;
 using InstrWithPrecision = WithPrecision<KInstruction>;
+
+inline size_t hash_combine2(std::size_t s, std::size_t v) {
+  return s ^ (v + 0x9e3779b9 + (s << 6) + (s >> 2));
+}
+
+template <class T> inline void hash_combine(std::size_t &s, const T &v) {
+  std::hash<T> h;
+  s = hash_combine2(s, h(v));
+}
+
+enum class ReachWithoutError {
+  Reach = 0,
+  Return,
+  NPESource,
+  BranchFalse,
+  BranchTrue,
+  Call,
+  AfterCall
+};
+
+struct EventKind final {
+  const bool isError;
+  const ReachWithErrors kinds;
+  const ReachWithoutError kind;
+  size_t hashValue = 0;
+  void computeHash() {
+    hash_combine(hashValue, isError);
+    for (auto k : kinds)
+      hash_combine(hashValue, k);
+    hash_combine(hashValue, kind);
+  }
+  EventKind(ReachWithErrors&& kinds) : isError(true), kinds(kinds), kind(ReachWithoutError::Reach) { computeHash(); }
+  EventKind(ReachWithoutError kind) : isError(false), kind(kind) { computeHash(); }
+};
+}
+
+namespace std {
+  template <>
+  struct hash<klee::EventKind> {
+    size_t operator()(const klee::EventKind& k) const {
+      return k.hashValue;
+    }
+  };
+}
+
+namespace klee {
+enum class ToolName {
+  Unknown = 0,
+  SecB,
+  clang,
+  CppCheck,
+  Infer,
+  Cooddy
+};
+
+class LineColumnRange;
+
+struct LocRange {
+  virtual LineColumnRange getRange() const = 0;
+  virtual ~LocRange() = default;
+  virtual Precision maxPrecision() const = 0;
+  virtual size_t hash() const = 0;
+  virtual std::string toString() const = 0;
+  virtual bool operator==(const LocRange &other) const = 0;
+  bool hasInside(KInstruction *ki) const {
+    if (isa<llvm::DbgInfoIntrinsic>(ki->inst))
+      return false;
+    InstrWithPrecision kp(ki);
+    hasInsideInternal(kp);
+    return !kp.isNotFound();
+  }
+  void hasInside(InstrWithPrecision &kp) const {
+    if (kp.precision > maxPrecision()) {
+      kp.setNotFound();
+      return;
+    }
+    hasInsideInternal(kp);
+  }
+protected:
+  virtual void hasInsideInternal(InstrWithPrecision &kp) const = 0;
+};
+
+class LineColumnRange final : public LocRange {
+  const size_t startLine;
+  const size_t startColumn;
+  const size_t endLine;
+  const size_t endColumn;
+  static const size_t empty = std::numeric_limits<size_t>::max();
+
+  bool inline onlyLine() const {
+    return startColumn == empty;
+  }
+
+public:
+  explicit LineColumnRange(size_t startLine, size_t startColumn, size_t endLine, size_t endColumn) : startLine(startLine), startColumn(startColumn), endLine(endLine), endColumn(endColumn) {
+    assert(startLine <= endLine);
+    assert(startLine != endLine || startColumn <= endColumn);
+  }
+  explicit LineColumnRange(size_t startLine, size_t endLine) : LineColumnRange(startLine, empty, endLine, empty) {}
+  explicit LineColumnRange(const KInstruction *ki) : LineColumnRange(ki->getLine(), ki->getColumn(), ki->getLine(), ki->getColumn()) {}
+
+  LineColumnRange getRange() const final {
+    return *this;
+  }
+
+  Precision maxPrecision() const final {
+    return onlyLine() ? Precision::Line : Precision::Column;
+  }
+
+  size_t hash() const final {
+    size_t hashValue = 0;
+    hashValue = hash_combine2(hashValue, startLine);
+    hashValue = hash_combine2(hashValue, endLine);
+    hashValue = hash_combine2(hashValue, startColumn);
+    return hash_combine2(hashValue, endColumn);
+  }
+
+  std::string toString() const final {
+    if (onlyLine())
+      return std::to_string(startLine) + "-" + std::to_string(endLine);
+    return std::to_string(startLine) + ":" + std::to_string(startColumn) + "-" + std::to_string(endLine) + ":" + std::to_string(endColumn);
+  }
+
+  void hasInsideInternal(InstrWithPrecision &kp) const final {
+    auto line = kp.ptr->getLine();
+    if (!(startLine <= line && line <= endLine)) {
+      kp.setNotFound();
+      return;
+    }
+    if (onlyLine()) {
+      kp.precision = Precision::Line;
+      return;
+    }
+    auto column = kp.ptr->getColumn();
+    auto ok = true;
+    if (line == startLine)
+      ok = column >= startColumn;
+    if (line == endLine)
+      ok = ok && column <= endColumn;
+    if (ok)
+      kp.precision = Precision::Column;
+    else
+      kp.precision = Precision::Line;
+  }
+
+  bool operator==(const LocRange &other) const final {
+    if (auto p = dynamic_cast<LineColumnRange const*>(&other))
+      return startLine == p->startLine && endLine == p->endLine && startColumn == p->startColumn && endColumn == p->endColumn;
+    return false;
+  }
+};
+
+using OpCode = unsigned;
 
 struct Location {
   struct LocationHash {
@@ -208,37 +367,32 @@ struct Location {
     }
   };
   std::string filename;
-  unsigned int startLine;
-  unsigned int endLine;
-  optional<unsigned int> startColumn;
-  optional<unsigned int> endColumn;
+  std::unique_ptr<LocRange> range;
 
-  static ref<Location> create(std::string filename_, unsigned int startLine_,
+  static ref<Location> create(std::string &&filename_, unsigned int startLine_,
                               optional<unsigned int> endLine_,
                               optional<unsigned int> startColumn_,
-                              optional<unsigned int> endColumn_);
+                              optional<unsigned int> endColumn_,
+                              ToolName toolName, EventKind &kind);
 
   virtual ~Location();
-  std::size_t hash() const { return hashValue; }
+  virtual std::size_t hash() const { return hashValue; }
 
   /// @brief Required by klee::ref-managed objects
   class ReferenceCounter _refCount;
 
   bool operator==(const Location &other) const {
-    return filename == other.filename && startLine == other.startLine &&
-           endLine == other.endLine && startColumn == other.startColumn &&
-           endColumn == other.endColumn;
+    return filename == other.filename && *range == *other.range;
   }
 
   bool isInside(const std::string &name) const;
 
   using Instructions = std::unordered_map<
       unsigned int,
-      std::unordered_map<unsigned int, std::unordered_set<unsigned int>>>;
+      std::unordered_map<unsigned int, std::unordered_set<OpCode>>>;
 
   void isInside(InstrWithPrecision &kp, const Instructions &origInsts) const;
-
-  virtual void isInside(BlockWithPrecision &bp, const Instructions &origInsts);
+  void isInside(BlockWithPrecision &bp, const Instructions &origInsts) const;
 
   std::string toString() const;
 
@@ -252,33 +406,19 @@ private:
   static LocationHashSet locations;
 
   size_t hashValue = 0;
-  void computeHash() {
+  void computeHash(EventKind &kind) {
     hash_combine(hashValue, filename);
-    hash_combine(hashValue, startLine);
-    hash_combine(hashValue, endLine);
-    hash_combine(hashValue, startColumn);
-    hash_combine(hashValue, endColumn);
+    hash_combine(hashValue, range->hash());
+    hash_combine(hashValue, kind);
   }
 
-  template <class T> inline void hash_combine(std::size_t &s, const T &v) {
-    std::hash<T> h;
-    s ^= h(v) + 0x9e3779b9 + (s << 6) + (s >> 2);
+protected:
+  Location(std::string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind)
+      : filename(std::move(filename_)), range(std::move(range)) {
+    computeHash(kind);
   }
 
-  Location(std::string filename_, unsigned int startLine_,
-           optional<unsigned int> endLine_, optional<unsigned int> startColumn_,
-           optional<unsigned int> endColumn_)
-      : filename(filename_), startLine(startLine_),
-        endLine(endLine_.has_value() ? *endLine_ : startLine_),
-        startColumn(startColumn_),
-        endColumn(endColumn_.has_value() ? endColumn_ : startColumn_) {
-    computeHash();
-  }
-};
-
-struct CoodyNPELocation : public Location {
-  CoodyNPELocation(const Location &loc) : Location(loc) {}
-  void isInside(BlockWithPrecision &bp, const Instructions &origInsts) override;
+  virtual void isInsideInternal(BlockWithPrecision &bp, const Instructions &origInsts) const;
 };
 
 struct RefLocationHash {
@@ -293,9 +433,9 @@ struct RefLocationCmp {
 
 struct Result {
   std::vector<ref<Location>> locations;
-  std::vector<optional<json>> metadatas;
-  std::string id;
-  std::vector<ReachWithError> errors;
+  const std::vector<optional<json>> metadatas;
+  const std::string id;
+  const ReachWithErrors errors;
 };
 
 struct SarifReport {

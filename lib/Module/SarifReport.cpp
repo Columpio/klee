@@ -25,40 +25,7 @@ using namespace klee;
 namespace {
 bool isOSSeparator(char c) { return c == '/' || c == '\\'; }
 
-enum class ToolName {
-  Unknown = 0,
-  SecB,
-  clang,
-  CppCheck,
-  Infer,
-  Cooddy
-};
-
-optional<ref<Location>>
-tryConvertLocationJson(const LocationJson &locationJson) {
-  const auto &physicalLocation = locationJson.physicalLocation;
-  if (!physicalLocation.has_value()) {
-    return nonstd::nullopt;
-  }
-
-  const auto &artifactLocation = physicalLocation->artifactLocation;
-  if (!artifactLocation.has_value() || !artifactLocation->uri.has_value()) {
-    return nonstd::nullopt;
-  }
-
-  const auto filename = std::move(*(artifactLocation->uri));
-
-  const auto &region = physicalLocation->region;
-  if (!region.has_value() || !region->startLine.has_value()) {
-    return nonstd::nullopt;
-  }
-
-  return Location::create(std::move(filename), *(region->startLine),
-                          region->endLine, region->startColumn,
-                          region->endColumn);
-}
-
-std::vector<ReachWithError>
+ReachWithErrors
 tryConvertRuleJson(const std::string &ruleId, ToolName toolName,
                    const optional<Message> &errorMessage) {
   switch (toolName) {
@@ -126,35 +93,93 @@ tryConvertRuleJson(const std::string &ruleId, ToolName toolName,
   }
 }
 
-void tryConvertMessage(ToolName toolName,
-                       const optional<Message> &errorMessage,
-                       ref<Location> &loc) {
-  if (toolName != ToolName::Cooddy || !errorMessage.has_value())
-    return;
-  std::string start = "Dereferencing of \"";
-  std::string end = "\" which can be null";
-  auto &text = errorMessage->text;
-  if (text.substr(0, start.size()) == start &&
-      text.substr(text.size() - end.size(), end.size()) == end) {
-    auto size = text.size() - end.size() - start.size();
-    auto derefedExpr = text.substr(start.size(), size);
-    loc = new CoodyNPELocation(*loc);
+bool startsWith(const std::string &s, const std::string &prefix) {
+  return s.rfind(prefix, 0) == 0;
+}
+
+bool endsWith(const std::string &s, const std::string &suffix) {
+  ssize_t maybe_index = s.size() - suffix.size();
+  return maybe_index > 0 && (s.find(suffix, maybe_index) == (size_t) maybe_index);
+}
+
+ReachWithoutError tryConvertCooddyNoErrorKind(const klee::Message &msg) {
+  const auto &message = msg.text;
+  if ("Assume return here" == message)
+    return ReachWithoutError::Return;
+  if ("Null pointer returned as the result" == message)
+    return ReachWithoutError::AfterCall;
+  if ("Null pointer source" == message)
+    return ReachWithoutError::NPESource;
+  if (startsWith(message, "Function ") && endsWith(message, " is executed"))
+    return ReachWithoutError::Call;
+  if (endsWith(message, " is false"))
+    return ReachWithoutError::BranchFalse;
+  if (endsWith(message, " is true"))
+    return ReachWithoutError::BranchTrue;
+  if (startsWith(message, "Null pointer passed as"))
+    return ReachWithoutError::Call;
+  return ReachWithoutError::Reach;
+}
+
+ReachWithoutError tryConvertNoErrorKind(ToolName toolName, const klee::Message &message) {
+  switch (toolName) {
+    case ToolName::Cooddy:
+      return tryConvertCooddyNoErrorKind(message);
+    default:
+      return ReachWithoutError::Reach;
   }
+}
+
+ReachWithErrors tryConvertErrorKind(ToolName toolName, const optional<std::string> &ruleId, const optional<Message> &msg) {
+  if (!ruleId.has_value()) {
+    return {ReachWithError::Reachable};
+  } else {
+    return tryConvertRuleJson(*ruleId, toolName, msg);
+  }
+}
+
+EventKind convertKindJson(ToolName toolName, const optional<std::string> &ruleId, const std::optional<klee::Message> &mOpt) {
+  if (!mOpt.has_value())
+    return EventKind(ReachWithoutError::Reach);
+  const auto &message = *mOpt;
+  auto noError = tryConvertNoErrorKind(toolName, message);
+  if (noError != ReachWithoutError::Reach)
+    return EventKind(noError);
+  return EventKind(tryConvertErrorKind(toolName, ruleId, mOpt));
+}
+
+optional<ref<Location>>
+tryConvertLocationJson(ToolName toolName, const optional<std::string> &ruleId, const LocationJson &locationJson) {
+  const auto &physicalLocation = locationJson.physicalLocation;
+  if (!physicalLocation.has_value()) {
+    return nonstd::nullopt;
+  }
+
+  const auto &artifactLocation = physicalLocation->artifactLocation;
+  if (!artifactLocation.has_value() || !artifactLocation->uri.has_value()) {
+    return nonstd::nullopt;
+  }
+
+  const auto &region = physicalLocation->region;
+  if (!region.has_value() || !region->startLine.has_value()) {
+    return nonstd::nullopt;
+  }
+
+  auto kind = convertKindJson(toolName, ruleId, region->message);
+  auto filename = *(artifactLocation->uri);
+
+  return Location::create(std::move(filename), *(region->startLine),
+                          region->endLine, region->startColumn,
+                          region->endColumn, toolName, kind);
 }
 
 optional<Result> tryConvertResultJson(const ResultJson &resultJson,
                                       ToolName toolName,
                                       const std::string &id) {
-  std::vector<ReachWithError> errors = {};
-  if (!resultJson.ruleId.has_value()) {
-    errors = {ReachWithError::Reachable};
-  } else {
-    errors =
-        tryConvertRuleJson(*resultJson.ruleId, toolName, resultJson.message);
-    if (errors.size() == 0) {
-      klee_warning("undefined error in %s result", id.c_str());
-      return nonstd::nullopt;
-    }
+  auto errors = tryConvertErrorKind(toolName, resultJson.ruleId, resultJson.message);
+  if (errors.size() == 0) {
+    klee_warning("undefined error in %s result", id.c_str());
+    return nonstd::nullopt;
   }
 
   std::vector<ref<Location>> locations;
@@ -170,7 +195,7 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
         return nonstd::nullopt;
       }
 
-      auto maybeLocation = tryConvertLocationJson(*threadFlowLocation.location);
+      auto maybeLocation = tryConvertLocationJson(toolName, resultJson.ruleId, *threadFlowLocation.location);
       if (maybeLocation.has_value()) {
         locations.push_back(*maybeLocation);
         metadatas.push_back(std::move(threadFlowLocation.metadata));
@@ -178,7 +203,7 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
     }
   } else {
     assert(resultJson.locations.size() == 1);
-    auto maybeLocation = tryConvertLocationJson(resultJson.locations[0]);
+    auto maybeLocation = tryConvertLocationJson(toolName, resultJson.ruleId, resultJson.locations[0]);
     if (maybeLocation.has_value()) {
       locations.push_back(*maybeLocation);
     }
@@ -187,14 +212,16 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
   if (locations.empty()) {
     return nonstd::nullopt;
   }
-  tryConvertMessage(toolName, resultJson.message, locations.back());
 
-  return Result{std::move(locations), std::move(metadatas), id,
-                std::move(errors)};
+  return Result{std::move(locations), std::move(metadatas), id, std::move(errors)};
 }
 } // anonymous namespace
 
 namespace klee {
+llvm::cl::opt<bool> LocationAccuracy(
+    "location-accuracy", cl::init(false),
+    cl::desc("Check location with line and column accuracy (default=false)"));
+
 static const char *ReachWithErrorNames[] = {
     "DoubleFree",
     "UseAfterFree",
@@ -209,7 +236,7 @@ const char *getErrorString(ReachWithError error) {
   return ReachWithErrorNames[error];
 }
 
-std::string getErrorsString(const std::vector<ReachWithError> &errors) {
+std::string getErrorsString(const ReachWithErrors &errors) {
   if (errors.size() == 1) {
     return getErrorString(*errors.begin());
   }
@@ -261,13 +288,13 @@ public:
   void getNextId(const klee::ResultJson &resultJson) override { id++; }
 };
 
-TraceId *createTraceId(ToolName toolName,
+std::unique_ptr<TraceId> createTraceId(ToolName toolName,
                        const std::vector<klee::ResultJson> &results) {
   if (toolName == ToolName::Cooddy)
-    return new CooddyTraceId();
+    return std::make_unique<CooddyTraceId>();
   else if (results.size() > 0 && results[0].id.has_value())
-    return new GetterTraceId();
-  return new NumericTraceId();
+    return std::make_unique<GetterTraceId>();
+  return std::make_unique<NumericTraceId>();
 }
 
 void setResultId(const ResultJson &resultJson, bool useProperId, unsigned &id) {
@@ -305,7 +332,7 @@ SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
   const RunJson &run = reportJson.runs[0];
   auto toolName = convertToolName(run.tool.driver.name);
 
-  TraceId *id = createTraceId(toolName, run.results);
+  auto id = createTraceId(toolName, run.results);
 
   for (const auto &resultJson : run.results) {
     id->getNextId(resultJson);
@@ -315,7 +342,6 @@ SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
       report.results.push_back(*maybeResult);
     }
   }
-  delete id;
 
   return report;
 }
@@ -323,12 +349,161 @@ SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
 Location::EquivLocationHashSet Location::cachedLocations;
 Location::LocationHashSet Location::locations;
 
-ref<Location> Location::create(std::string filename_, unsigned int startLine_,
+class InstructionRange : public LocRange {
+  LineColumnRange range;
+  OpCode opCode;
+
+public:
+  InstructionRange(LineColumnRange&& range, OpCode opCode) : range(std::move(range)), opCode(opCode) {}
+
+  LineColumnRange getRange() const final { return range; }
+
+  Precision maxPrecision() const final {
+    return Precision::Instruction;
+  }
+
+  size_t hash() const final { return hash_combine2(range.hash(), opCode); }
+
+  std::string toString() const final {
+    return range.toString() + " " + std::to_string(opCode);
+  }
+
+  void hasInsideInternal(InstrWithPrecision &kp) const final {
+    range.hasInsideInternal(kp);
+    if (kp.isNotFound())
+      return;
+    if (kp.ptr->inst->getOpcode() != opCode)
+      return;
+    if (hasInsidePrecise(kp.ptr))
+      kp.precision = Precision::Instruction;
+    else
+      kp.precision = std::min(kp.precision, Precision::Column);
+  }
+
+  bool operator==(const LocRange &other) const final {
+    if (auto p = dynamic_cast<InstructionRange const*>(&other))
+      return opCode == p->opCode && range == p->range;
+    return false;
+  }
+
+protected:
+  virtual bool hasInsidePrecise(const KInstruction *ki) const { return true; }
+};
+
+namespace Cooddy {
+using namespace llvm;
+using namespace std;
+
+class StoreNullRange final : public InstructionRange {
+  using InstructionRange::InstructionRange;
+
+public:
+  StoreNullRange(LineColumnRange&& range) : InstructionRange(std::move(range), Instruction::Store) {}
+
+  bool hasInsidePrecise(const KInstruction *ki) const final {
+    auto stinst = dyn_cast<llvm::StoreInst>(ki->inst);
+    if (!stinst)
+      return false;
+    auto value = dyn_cast<llvm::Constant>(stinst->getValueOperand());
+    if (!value)
+      return false;
+    return value->isNullValue();
+  }
+};
+
+class BranchRange final : public InstructionRange {
+  using InstructionRange::InstructionRange;
+
+public:
+  BranchRange(LineColumnRange&& range) : InstructionRange(std::move(range), Instruction::Br) {}
+
+  bool hasInsidePrecise(const KInstruction *ki) const final {
+    return ki->inst->getNumSuccessors() == 2;
+  }
+};
+
+struct OpCodeLoc final : public Location {
+  using Location::Location;
+  OpCodeLoc(string &&filename_, LineColumnRange&& range, EventKind &kind, OpCode opCode) : Location(move(filename_), make_unique<InstructionRange>(move(range), opCode), kind) {}
+};
+
+struct AfterLoc : public Location {
+  using Location::Location;
+  void isInsideInternal(BlockWithPrecision &bp, const Instructions &origInsts) const final;
+protected:
+  virtual void isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const = 0;
+};
+
+struct AfterBlockLoc final : public AfterLoc {
+  using AfterLoc::AfterLoc;
+  AfterBlockLoc(string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, unsigned indexOfNext) : AfterLoc(move(filename_), move(range), kind), indexOfNext(indexOfNext) {}
+  void isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const final;
+
+private:
+  unsigned indexOfNext;
+};
+
+struct AfterInstLoc final : public AfterLoc {
+  using AfterLoc::AfterLoc;
+  AfterInstLoc(string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, OpCode opCode) : AfterLoc(move(filename_), move(range), kind), opCode(opCode) {}
+  void isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const final;
+
+private:
+  OpCode opCode;
+};
+} // namespace Cooddy
+
+LineColumnRange create(unsigned int startLine_,
                                optional<unsigned int> endLine_,
                                optional<unsigned int> startColumn_,
                                optional<unsigned int> endColumn_) {
-  Location *loc =
-      new Location(filename_, startLine_, endLine_, startColumn_, endColumn_);
+  auto endLine = endLine_.has_value() ? *endLine_ : startLine_;
+  if (LocationAccuracy && startColumn_.has_value() && endColumn_.has_value())
+    return LineColumnRange(startLine_, *startColumn_, endLine, *endColumn_);
+  return LineColumnRange(startLine_, endLine);
+}
+
+ref<Location> Location::create(std::string &&filename_, unsigned int startLine_,
+                               optional<unsigned int> endLine_,
+                               optional<unsigned int> startColumn_,
+                               optional<unsigned int> endColumn_, ToolName toolName, EventKind &kind) {
+  auto range = klee::create(startLine_, endLine_, startColumn_, endColumn_);
+  Location *loc = nullptr;
+  switch (toolName) {
+  case ToolName::Cooddy:
+    if (kind.isError) {
+      if (std::find(kind.kinds.begin(), kind.kinds.end(), ReachWithError::MustBeNullPointerException) != kind.kinds.end())
+        loc = new Cooddy::AfterInstLoc(std::move(filename_), std::make_unique<LineColumnRange>(std::move(range)), kind, Instruction::Load);
+      break;
+    }
+    switch (kind.kind) {
+    case ReachWithoutError::Return:
+      loc = new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Ret);
+      break;
+    case ReachWithoutError::NPESource:
+      loc = new Location(std::move(filename_), std::make_unique<Cooddy::StoreNullRange>(std::move(range)), kind);
+      break;
+    case ReachWithoutError::BranchTrue:
+    case ReachWithoutError::BranchFalse:
+    {
+      auto succ = kind.kind == ReachWithoutError::BranchTrue ? 0 : 1;
+      loc = new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<Cooddy::BranchRange>(std::move(range)), kind, succ);
+    }  break;
+    case ReachWithoutError::Call:
+      loc = new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
+      break;
+    case ReachWithoutError::AfterCall:
+      loc = new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<InstructionRange>(std::move(range), Instruction::Call), kind, 0);
+      break;
+    case ReachWithoutError::Reach:
+      break; // use below `new Location`
+    }
+    break;
+  default:
+    break;
+  }
+  if (!loc)
+    loc = new Location(std::move(filename_), std::make_unique<LineColumnRange>(std::move(range)), kind);
   std::pair<EquivLocationHashSet::const_iterator, bool> success =
       cachedLocations.insert(loc);
   if (success.second) {
@@ -364,59 +539,52 @@ bool Location::isInside(const std::string &name) const {
 void Location::isInside(InstrWithPrecision &kp,
                         const Instructions &origInsts) const {
   auto ki = kp.ptr;
-  if (!isa<DbgInfoIntrinsic>(ki->inst) && startLine <= ki->getLine() &&
-      ki->getLine() <= endLine) {
-    auto opCode = ki->inst->getOpcode();
-    if (*startColumn <= ki->getColumn() && ki->getColumn() <= *endColumn &&
-        origInsts.at(ki->getLine()).at(ki->getColumn()).count(opCode) != 0)
-      kp.precision = Precision::ColumnLevel;
-    else
-      kp.precision = Precision::LineLevel;
+  if (!origInsts.at(ki->getLine()).at(ki->getColumn()).count(ki->inst->getOpcode())) {
+    kp.setNotFound();
     return;
   }
+  range->hasInside(kp);
 }
 
-void Location::isInside(BlockWithPrecision &bp, const Instructions &origInsts) {
-  if (!startColumn.has_value()) {
-    auto firstKi = bp.ptr->getFirstInstruction();
-    auto lastKi = bp.ptr->getLastInstruction();
-    if (firstKi->getLine() <= endLine && startLine <= lastKi->getLine())
-      bp.precision = Precision::LineLevel;
-    else
-      bp.setNotFound();
-    return;
-  }
-  auto tmpBP = bp;
-  bp.setNotFound();
-  for (size_t i = 0; i < tmpBP.ptr->numInstructions; ++i) {
-    InstrWithPrecision kp(tmpBP.ptr->instructions[i]);
+void Location::isInside(BlockWithPrecision &bp, const Instructions &origInsts) const {
+  if (bp.precision > range->maxPrecision())
+    bp.setNotFound();
+  else
+    isInsideInternal(bp, origInsts);
+}
+
+void Location::isInsideInternal(BlockWithPrecision &bp, const Instructions &origInsts) const {
+  bool found = false;
+  for (size_t i = 0; i < bp.ptr->numInstructions; ++i) {
+    InstrWithPrecision kp(bp.ptr->instructions[i], bp.precision);
     isInside(kp, origInsts);
-    if (kp.precision >= tmpBP.precision) {
-      tmpBP.precision = kp.precision;
-      bp = tmpBP;
+    if (kp.precision >= bp.precision) {
+      bp.precision = kp.precision;
+      found = true;
+      if (kp.precision >= range->maxPrecision()) {
+        bp.ptr = kp.ptr->parent;
+        return;
+      }
     }
   }
+  if (!found)
+    bp.setNotFound();
 }
 
-void CoodyNPELocation::isInside(BlockWithPrecision &bp,
-                                const Instructions &origInsts) {
+void Cooddy::AfterLoc::isInsideInternal(BlockWithPrecision &bp, const Instructions &origInsts) const {
   // if (x + y > z && aaa->bbb->ccc->ddd)
   // ^^^^^^^^^^^^^^^^^ first, skip all this
   // second skip this ^^^^^^^^ (where Cooddy event points)
-  // finally, get this         ^ (real location of `Load` instruction)
-  auto block = bp.ptr;
-  size_t start = 0;
+  // finally, get this         ^ (real location of needed instruction)
   auto inside = false;
-  auto precision = bp.precision;
-  KInstruction *ki = nullptr;
-  for (; start < block->numInstructions; ++start) {
-    ki = block->instructions[start];
-    InstrWithPrecision kp(ki);
+  InstrWithPrecision afterInst(nullptr, bp.precision);
+  for (size_t i = 0; i < bp.ptr->numInstructions; ++i) {
+    afterInst.ptr = bp.ptr->instructions[i];
+    auto kp = afterInst;
     Location::isInside(kp, origInsts);
-    if (kp.precision >= precision) { // first: go until Cooddy event
-      precision = kp.precision;
-      if (!inside)                   // first: reached Cooddy event
-        inside = true;
+    if (kp.precision >= afterInst.precision) { // first: go until Cooddy event
+      afterInst.precision = kp.precision;
+      inside = true;                 // first: reached Cooddy event
     } else if (inside)               // second: skip until left Coody event
       break;
   }
@@ -424,29 +592,24 @@ void CoodyNPELocation::isInside(BlockWithPrecision &bp,
     bp.setNotFound();
     return;
   }
-  if (precision == Precision::LineLevel) {
-    bp.precision = precision;
+  isInsideInternal(bp, afterInst);
+}
+
+void Cooddy::AfterBlockLoc::isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const {
+  if (afterInst.precision != Precision::Instruction) {
+    bp.setNotFound();
     return;
   }
-  // finally: Load instruction
-  if (ki->inst->getOpcode() == Instruction::Load) {
-    // we got precise instruction, so redefine the location
-    startLine = (endLine = ki->getLine());
-    startColumn = (endColumn = ki->getColumn());
-    bp.precision = Precision::ColumnLevel;
-    return;
-  }
-  // most probably Cooddy points to a macro call
-  for (size_t i = 0; i < start; i++) {
-    if (block->instructions[i]->inst->getOpcode() == Instruction::Load) {
-      bp.precision = Precision::LineLevel;
-      return;
-    }
-  }
-  bp.setNotFound();
+  auto nextBlock = bp.ptr->basicBlock->getTerminator()->getSuccessor(indexOfNext);
+  bp.ptr = bp.ptr->parent->blockMap.at(nextBlock);
+  bp.precision = afterInst.precision;
+}
+
+void Cooddy::AfterInstLoc::isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const {
+  bp.precision = afterInst.ptr->inst->getOpcode() == opCode ? Precision::Instruction : afterInst.precision;
 }
 
 std::string Location::toString() const {
-  return filename + ":" + std::to_string(startLine);
+  return filename + ":" + range->toString();
 }
 } // namespace klee

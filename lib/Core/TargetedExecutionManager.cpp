@@ -329,7 +329,7 @@ TargetedExecutionManager::prepareAllLocations(KModule *kmodule,
 
   for (auto it = locations.begin(); it != locations.end(); ++it) {
     auto loc = *it;
-    auto precision = Precision::LineLevel;
+    auto precision = Precision::Line;
     Blocks blocks;
     for (const auto &[fileName, origInstsInFile] : kmodule->origInstructions) {
       if (kmodule->origInstructions.count(fileName) == 0) {
@@ -432,7 +432,7 @@ bool TargetedExecutionManager::tryResolveLocations(
         }
       }
       resolvedLocations.push_back(location);
-    } else if (index == result.locations.size() - 1) {
+    } else if (index + 1 == result.locations.size()) {
       klee_warning(
           "Trace %s is malformed! %s at location %s, so skipping this trace.",
           result.id.c_str(), getErrorsString(result.errors).c_str(),
