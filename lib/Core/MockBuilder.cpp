@@ -381,6 +381,7 @@ void MockBuilder::buildAnnotationForExternalFunctionArgs(
       auto [prev, elem] = goByOffset(arg, offset);
 
       Statement::AllocSource *allocSourcePtr = nullptr;
+      Statement::Free *freePtr = nullptr;
       Statement::InitNull *initNullPtr = nullptr;
 
       for (const auto &statement : statementsOffset) {
@@ -435,6 +436,15 @@ void MockBuilder::buildAnnotationForExternalFunctionArgs(
           }
           break;
         }
+        case Statement::Kind::Free: {
+          if (elem->getType()->isPointerTy()) {
+            freePtr = (Statement::Free *)statement.get();
+          } else {
+            klee_message("Annotation: not valid annotation %s",
+                         statement->toString().c_str());
+          }
+          break;
+        }
         case Statement::Kind::Unknown:
         default:
           klee_message("Annotation not implemented %s",
@@ -442,7 +452,9 @@ void MockBuilder::buildAnnotationForExternalFunctionArgs(
           break;
         }
       }
-
+      if (freePtr) {
+        buildFree(elem, freePtr);
+      }
       processingValue(prev, elem->getType(), allocSourcePtr, initNullPtr);
     }
   }
@@ -509,6 +521,15 @@ void MockBuilder::buildAllocSource(
   builder->CreateStore(mallocValue, prev);
 }
 
+void MockBuilder::buildFree(llvm::Value *elem, const Statement::Free *freePtr) {
+  if (freePtr->value != Statement::Free::Free_) {
+    klee_warning("Annotation: AllocSource \"%d\" not implemented use free",
+                 freePtr->value);
+  }
+  auto freeInstr = llvm::CallInst::CreateFree(elem, builder->GetInsertBlock());
+  builder->Insert(freeInstr);
+}
+
 void MockBuilder::buildAnnotationForExternalFunctionReturn(
     llvm::Function *func, const std::vector<Statement::Ptr> &statements) {
   auto returnType = func->getReturnType();
@@ -517,6 +538,7 @@ void MockBuilder::buildAnnotationForExternalFunctionReturn(
     return;
   }
 
+  // TODO: change to set
   Statement::AllocSource *allocSourcePtr = nullptr;
   Statement::InitNull *initNullPtr = nullptr;
 
@@ -538,9 +560,13 @@ void MockBuilder::buildAnnotationForExternalFunctionReturn(
                         : nullptr;
       break;
     }
+    case Statement::Kind::Free: {
+      klee_warning("Annotation: unused \"Free\" for return");
+      break;
+    }
     case Statement::Kind::Unknown:
     default:
-      klee_message("Annotation not implemented %s",
+      klee_message("Annotation: not implemented %s",
                    statement->toString().c_str());
       break;
     }

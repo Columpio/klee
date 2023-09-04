@@ -60,6 +60,7 @@ public:
   std::unique_ptr<llvm::Module> build();
   void buildAllocSource(llvm::Value *prev, llvm::Type *elemType,
                         const Statement::AllocSource *allocSourcePtr);
+  void buildFree(llvm::Value *elem, const Statement::Free *freePtr);
   void processingValue(llvm::Value *prev, llvm::Type *elemType,
                        const Statement::AllocSource *allocSourcePtr,
                        const Statement::InitNull *initNullPtr);

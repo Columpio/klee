@@ -25,7 +25,9 @@ enum class Kind {
 
   Deref,
   InitNull,
+  // TODO: rename to alloc
   AllocSource,
+  Free
 };
 
 enum class Property {
@@ -79,6 +81,23 @@ public:
   Type value;
 
   explicit AllocSource(const std::string &str = "AllocSource::1");
+
+  [[nodiscard]] Kind getKind() const override;
+};
+
+struct Free final : public Unknown {
+public:
+  enum Type {
+    Free_ = 1,           // Kind of free function
+    Delete = 2,         // operator delete
+    DeleteBrackets = 3, // operator delete[]
+    CloseFile = 4,      // close file
+    MutexUnlock = 5     // mutex unlock (pthread_mutex_unlock)
+  };
+
+  Type value;
+
+  explicit Free(const std::string &str = "FreeSource::1");
 
   [[nodiscard]] Kind getKind() const override;
 };

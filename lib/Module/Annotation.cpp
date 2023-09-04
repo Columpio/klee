@@ -116,10 +116,25 @@ AllocSource::AllocSource(const std::string &str) : Unknown(str) {
 
 Kind AllocSource::getKind() const { return Kind::AllocSource; }
 
+Free::Free(const std::string &str) : Unknown(str) {
+  if (!std::all_of(rawValue.begin(), rawValue.end(), isdigit)) {
+    klee_error("Annotation: Incorrect value format \"%s\"", rawValue.c_str());
+  }
+  if (rawValue.empty()) {
+    value = Free::Type::Free_;
+  } else {
+    value = static_cast<Type>(std::stoi(rawValue));
+  }
+}
+
+Kind Free::getKind() const { return Kind::Free; }
+
 const std::map<std::string, Statement::Kind> StringToKindMap = {
     {"deref", Statement::Kind::Deref},
     {"initnull", Statement::Kind::InitNull},
-    {"allocsource", Statement::Kind::AllocSource}};
+    {"allocsource", Statement::Kind::AllocSource},
+    {"freesource", Statement::Kind::Free},
+    {"freesink", Statement::Kind::Free}};
 
 inline Statement::Kind stringToKind(const std::string &str) {
   auto it = StringToKindMap.find(toLower(str));
@@ -140,6 +155,8 @@ Ptr stringToKindPtr(const std::string &str) {
     return std::make_shared<InitNull>(str);
   case Statement::Kind::AllocSource:
     return std::make_shared<AllocSource>(str);
+  case Statement::Kind::Free:
+    return std::make_shared<Free>(str);
   }
 }
 
