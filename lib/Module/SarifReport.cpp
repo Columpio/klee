@@ -109,16 +109,22 @@ ReachWithoutError tryConvertCooddyNoErrorKind(const klee::Message &msg) {
     return ReachWithoutError::Return;
   if ("Null pointer returned as the result" == message)
     return ReachWithoutError::AfterCall;
+  if (startsWith(message, "Use after free returned as"))
+    return ReachWithoutError::AfterCall;
   if ("Null pointer source" == message)
     return ReachWithoutError::NPESource;
+  if ("Free" == message)
+    return ReachWithoutError::Free;
   if (startsWith(message, "Function ") && endsWith(message, " is executed"))
+    return ReachWithoutError::Call;
+  if (startsWith(message, "Null pointer passed as"))
+    return ReachWithoutError::Call;
+  if (startsWith(message, "Use after free passed as"))
     return ReachWithoutError::Call;
   if (endsWith(message, " is false"))
     return ReachWithoutError::BranchFalse;
   if (endsWith(message, " is true"))
     return ReachWithoutError::BranchTrue;
-  if (startsWith(message, "Null pointer passed as"))
-    return ReachWithoutError::Call;
   return ReachWithoutError::Reach;
 }
 
@@ -359,6 +365,16 @@ bool LocRange::hasInside(KInstruction *ki) const {
   return kp.precision >= suitable;
 }
 
+void LocRange::hasInside(InstrWithPrecision &kp) {
+  if (kp.precision > maxPrecision()) {
+    kp.setNotFound();
+    return;
+  }
+  hasInsideInternal(kp);
+  if (kp.precision >= Precision::Instruction)
+    setRange(kp.ptr);
+}
+
 class InstructionRange : public LocRange {
   LineColumnRange range;
   OpCode opCode;
@@ -376,6 +392,10 @@ public:
 
   std::string toString() const final {
     return range.toString() + " " + std::to_string(opCode);
+  }
+
+  void setRange(const KInstruction *ki) final {
+    range.setRange(ki);
   }
 
   void hasInsideInternal(InstrWithPrecision &kp) const final {
@@ -396,7 +416,6 @@ protected:
 
 namespace Cooddy {
 using namespace llvm;
-using namespace std;
 
 class StoreNullRange final : public InstructionRange {
   using InstructionRange::InstructionRange;
@@ -405,10 +424,10 @@ public:
   StoreNullRange(LineColumnRange&& range) : InstructionRange(std::move(range), Instruction::Store) {}
 
   bool hasInsidePrecise(const KInstruction *ki) const final {
-    auto stinst = dyn_cast<llvm::StoreInst>(ki->inst);
+    auto stinst = dyn_cast<StoreInst>(ki->inst);
     if (!stinst)
       return false;
-    auto value = dyn_cast<llvm::Constant>(stinst->getValueOperand());
+    auto value = dyn_cast<Constant>(stinst->getValueOperand());
     if (!value)
       return false;
     return value->isNullValue();
@@ -428,7 +447,7 @@ public:
 
 struct OpCodeLoc final : public Location {
   using Location::Location;
-  OpCodeLoc(string &&filename_, LineColumnRange&& range, EventKind &kind, OpCode opCode) : Location(move(filename_), make_unique<InstructionRange>(move(range), opCode), kind) {}
+  OpCodeLoc(std::string &&filename_, LineColumnRange&& range, EventKind &kind, OpCode opCode) : Location(std::move(filename_), std::make_unique<InstructionRange>(std::move(range), opCode), kind) {}
 };
 
 struct AfterLoc : public Location {
@@ -440,7 +459,7 @@ protected:
 
 struct AfterBlockLoc final : public AfterLoc {
   using AfterLoc::AfterLoc;
-  AfterBlockLoc(string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, unsigned indexOfNext) : AfterLoc(move(filename_), move(range), kind), indexOfNext(indexOfNext) {}
+  AfterBlockLoc(std::string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, unsigned indexOfNext) : AfterLoc(std::move(filename_), std::move(range), kind), indexOfNext(indexOfNext) {}
   void isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const final;
 
 private:
@@ -449,7 +468,7 @@ private:
 
 struct AfterInstLoc final : public AfterLoc {
   using AfterLoc::AfterLoc;
-  AfterInstLoc(string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, OpCode opCode) : AfterLoc(move(filename_), move(range), kind), opCode(opCode) {}
+  AfterInstLoc(std::string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind, OpCode opCode) : AfterLoc(std::move(filename_), std::move(range), kind), opCode(opCode) {}
   void isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const final;
 
 private:
@@ -469,6 +488,40 @@ LineColumnRange create(unsigned int startLine_,
   return LineColumnRange(startLine_, endLine);
 }
 
+Location *Location::createCooddy(std::string &&filename_, LineColumnRange &range, EventKind &kind) {
+  if (kind.isError) {
+    if (kind.kinds.size() == 1) {
+      switch (kind.kinds[0]) {
+      case ReachWithError::DoubleFree:
+        return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
+      default:
+        return nullptr;
+      }
+    } else if (std::find(kind.kinds.begin(), kind.kinds.end(), ReachWithError::MustBeNullPointerException) != kind.kinds.end())
+      return new Cooddy::AfterInstLoc(std::move(filename_), std::make_unique<LineColumnRange>(std::move(range)), kind, Instruction::Load);
+    return nullptr;
+  }
+  switch (kind.kind) {
+  case ReachWithoutError::Return:
+    return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Ret);
+  case ReachWithoutError::NPESource:
+    return new Location(std::move(filename_), std::make_unique<Cooddy::StoreNullRange>(std::move(range)), kind);
+  case ReachWithoutError::BranchTrue:
+  case ReachWithoutError::BranchFalse:
+  {
+    auto succ = kind.kind == ReachWithoutError::BranchTrue ? 0 : 1;
+    return new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<Cooddy::BranchRange>(std::move(range)), kind, succ);
+  }
+  case ReachWithoutError::Free:
+  case ReachWithoutError::Call:
+    return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
+  case ReachWithoutError::AfterCall:
+    return new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<InstructionRange>(std::move(range), Instruction::Call), kind, 0);
+  case ReachWithoutError::Reach:
+    return nullptr;
+  }
+}
+
 ref<Location> Location::create(std::string &&filename_, unsigned int startLine_,
                                optional<unsigned int> endLine_,
                                optional<unsigned int> startColumn_,
@@ -477,33 +530,7 @@ ref<Location> Location::create(std::string &&filename_, unsigned int startLine_,
   Location *loc = nullptr;
   switch (toolName) {
   case ToolName::Cooddy:
-    if (kind.isError) {
-      if (std::find(kind.kinds.begin(), kind.kinds.end(), ReachWithError::MustBeNullPointerException) != kind.kinds.end())
-        loc = new Cooddy::AfterInstLoc(std::move(filename_), std::make_unique<LineColumnRange>(std::move(range)), kind, Instruction::Load);
-      break;
-    }
-    switch (kind.kind) {
-    case ReachWithoutError::Return:
-      loc = new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Ret);
-      break;
-    case ReachWithoutError::NPESource:
-      loc = new Location(std::move(filename_), std::make_unique<Cooddy::StoreNullRange>(std::move(range)), kind);
-      break;
-    case ReachWithoutError::BranchTrue:
-    case ReachWithoutError::BranchFalse:
-    {
-      auto succ = kind.kind == ReachWithoutError::BranchTrue ? 0 : 1;
-      loc = new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<Cooddy::BranchRange>(std::move(range)), kind, succ);
-    }  break;
-    case ReachWithoutError::Call:
-      loc = new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
-      break;
-    case ReachWithoutError::AfterCall:
-      loc = new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<InstructionRange>(std::move(range), Instruction::Call), kind, 0);
-      break;
-    case ReachWithoutError::Reach:
-      break; // use below `new Location`
-    }
+    loc = createCooddy(std::move(filename_), range, kind);
     break;
   default:
     break;

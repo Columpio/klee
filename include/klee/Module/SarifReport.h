@@ -208,6 +208,7 @@ enum class ReachWithoutError {
   Reach = 0,
   Return,
   NPESource,
+  Free,
   BranchFalse,
   BranchTrue,
   Call,
@@ -258,22 +259,17 @@ struct LocRange {
   virtual size_t hash() const = 0;
   virtual std::string toString() const = 0;
   bool hasInside(KInstruction *ki) const;
-  void hasInside(InstrWithPrecision &kp) const {
-    if (kp.precision > maxPrecision()) {
-      kp.setNotFound();
-      return;
-    }
-    hasInsideInternal(kp);
-  }
+  void hasInside(InstrWithPrecision &kp);
+  virtual void setRange(const KInstruction *ki) = 0;
 protected:
   virtual void hasInsideInternal(InstrWithPrecision &kp) const = 0;
 };
 
 class LineColumnRange final : public LocRange {
-  const size_t startLine;
-  const size_t startColumn;
-  const size_t endLine;
-  const size_t endColumn;
+  size_t startLine;
+  size_t startColumn;
+  size_t endLine;
+  size_t endColumn;
   static const size_t empty = std::numeric_limits<size_t>::max();
 
   bool inline onlyLine() const {
@@ -286,7 +282,12 @@ public:
     assert(startLine != endLine || startColumn <= endColumn);
   }
   explicit LineColumnRange(size_t startLine, size_t endLine) : LineColumnRange(startLine, empty, endLine, empty) {}
-  explicit LineColumnRange(const KInstruction *ki) : LineColumnRange(ki->getLine(), ki->getColumn(), ki->getLine(), ki->getColumn()) {}
+  explicit LineColumnRange(const KInstruction *ki) { setRange(ki); }
+
+  void setRange(const KInstruction *ki) final {
+    startLine = (endLine = ki->getLine());
+    startColumn = (endColumn = ki->getColumn());
+  }
 
   LineColumnRange getRange() const final {
     return *this;
@@ -402,6 +403,8 @@ private:
     hash_combine(hashValue, range->hash());
     hash_combine(hashValue, kind);
   }
+
+  static Location *createCooddy(std::string &&filename_, LineColumnRange &range, EventKind &kind);
 
 protected:
   Location(std::string &&filename_, std::unique_ptr<LocRange> range, EventKind &kind)
