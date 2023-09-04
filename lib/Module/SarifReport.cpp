@@ -389,12 +389,6 @@ public:
       kp.precision = std::min(kp.precision, Precision::Column);
   }
 
-  bool operator==(const LocRange &other) const final {
-    if (auto p = dynamic_cast<InstructionRange const*>(&other))
-      return opCode == p->opCode && range == p->range;
-    return false;
-  }
-
 protected:
   virtual bool hasInsidePrecise(const KInstruction *ki) const { return true; }
 };

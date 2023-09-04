@@ -257,7 +257,6 @@ struct LocRange {
   virtual Precision maxPrecision() const = 0;
   virtual size_t hash() const = 0;
   virtual std::string toString() const = 0;
-  virtual bool operator==(const LocRange &other) const = 0;
   bool hasInside(KInstruction *ki) const;
   void hasInside(InstrWithPrecision &kp) const {
     if (kp.precision > maxPrecision()) {
@@ -333,10 +332,8 @@ public:
       kp.precision = Precision::Line;
   }
 
-  bool operator==(const LocRange &other) const final {
-    if (auto p = dynamic_cast<LineColumnRange const*>(&other))
-      return startLine == p->startLine && endLine == p->endLine && startColumn == p->startColumn && endColumn == p->endColumn;
-    return false;
+  bool operator==(const LineColumnRange &p) const {
+    return startLine == p.startLine && endLine == p.endLine && startColumn == p.startColumn && endColumn == p.endColumn;
   }
 };
 
@@ -376,7 +373,7 @@ struct Location {
   class ReferenceCounter _refCount;
 
   bool operator==(const Location &other) const {
-    return filename == other.filename && *range == *other.range;
+    return filename == other.filename && range->getRange() == other.range->getRange();
   }
 
   bool isInside(const std::string &name) const;
