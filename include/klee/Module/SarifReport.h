@@ -258,13 +258,7 @@ struct LocRange {
   virtual size_t hash() const = 0;
   virtual std::string toString() const = 0;
   virtual bool operator==(const LocRange &other) const = 0;
-  bool hasInside(KInstruction *ki) const {
-    if (isa<llvm::DbgInfoIntrinsic>(ki->inst))
-      return false;
-    InstrWithPrecision kp(ki);
-    hasInsideInternal(kp);
-    return !kp.isNotFound();
-  }
+  bool hasInside(KInstruction *ki) const;
   void hasInside(InstrWithPrecision &kp) const {
     if (kp.precision > maxPrecision()) {
       kp.setNotFound();

@@ -349,6 +349,15 @@ SarifReport convertAndFilterSarifJson(const SarifReportJson &reportJson) {
 Location::EquivLocationHashSet Location::cachedLocations;
 Location::LocationHashSet Location::locations;
 
+bool LocRange::hasInside(KInstruction *ki) const {
+  if (isa<llvm::DbgInfoIntrinsic>(ki->inst))
+    return false;
+  InstrWithPrecision kp(ki);
+  hasInsideInternal(kp);
+  auto suitable = LocationAccuracy ? Precision::Column : Precision::Line;
+  return kp.precision >= suitable;
+}
+
 class InstructionRange : public LocRange {
   LineColumnRange range;
   OpCode opCode;
@@ -458,8 +467,10 @@ LineColumnRange create(unsigned int startLine_,
                                optional<unsigned int> startColumn_,
                                optional<unsigned int> endColumn_) {
   auto endLine = endLine_.has_value() ? *endLine_ : startLine_;
-  if (LocationAccuracy && startColumn_.has_value() && endColumn_.has_value())
-    return LineColumnRange(startLine_, *startColumn_, endLine, *endColumn_);
+  if (LocationAccuracy && startColumn_.has_value()) {
+    auto endColumn = endColumn_.has_value() ? *endColumn_ : *startColumn_;
+    return LineColumnRange(startLine_, *startColumn_, endLine, endColumn);
+  }
   return LineColumnRange(startLine_, endLine);
 }
 
@@ -539,7 +550,18 @@ bool Location::isInside(const std::string &name) const {
 void Location::isInside(InstrWithPrecision &kp,
                         const Instructions &origInsts) const {
   auto ki = kp.ptr;
-  if (!origInsts.at(ki->getLine()).at(ki->getColumn()).count(ki->inst->getOpcode())) {
+  //TODO: exterminate origInsts!
+  auto it = origInsts.find(ki->getLine());
+  if (it == origInsts.end()) {
+    kp.setNotFound();
+    return;
+  }
+  auto it2 = it->second.find(ki->getColumn());
+  if (it2 == it->second.end()) {
+    kp.setNotFound();
+    return;
+  }
+  if (!it2->second.count(ki->inst->getOpcode())) {
     kp.setNotFound();
     return;
   }
