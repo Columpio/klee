@@ -12,6 +12,7 @@
 #include "klee/Module/KInstruction.h"
 #include "klee/Module/KModule.h"
 #include "klee/Support/ErrorHandling.h"
+#include "llvm/Support/CommandLine.h"
 
 #include "klee/Support/CompilerWarning.h"
 DISABLE_WARNING_PUSH
