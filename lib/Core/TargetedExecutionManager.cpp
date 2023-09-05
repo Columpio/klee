@@ -182,6 +182,12 @@ cl::opt<unsigned long long>
               cl::desc("stop execution after visiting some basic block this "
                        "amount of times (default=0)."),
               cl::init(0), cl::cat(TerminationCat));
+
+cl::opt<bool> DebugLocalization(
+    "debug-localization", cl::init(false),
+    cl::desc(
+        "Debug error traces localization (default=false)."),
+    cl::cat(DebugCat));
 } // namespace klee
 
 TargetedHaltsOnTraces::TargetedHaltsOnTraces(ref<TargetForest> &forest) {
@@ -362,10 +368,15 @@ TargetedExecutionManager::prepareAllLocations(KModule *kmodule,
         }
       }
     }
-    if (!blocks.empty())
-      locToBlocks.emplace(loc, std::move(blocks));
+    if (DebugLocalization && !blocks.empty()) {
+      llvm::errs() << loc->toString() << " # " << (int) precision << " ~> ";
+      for (auto b : blocks) {
+        llvm::errs() << b->toString() << "; ";
+      }
+      llvm::errs() << "\n";
+    }
+    locToBlocks.emplace(loc, std::move(blocks));
   }
-
   return locToBlocks;
 }
 
@@ -534,6 +545,8 @@ TargetedExecutionManager::prepareTargets(KModule *kmodule, SarifReport paths) {
       whitelists[kf] = whitelist;
     }
     whitelists[kf]->addTrace(result, locToBlocks);
+    if (DebugLocalization)
+      whitelists[kf]->dump();
   }
 
   return whitelists;
