@@ -6714,6 +6714,7 @@ void Executor::runFunctionAsMain(Function *f, int argc, char **argv,
         continue;
       }
       auto whitelist = startFunctionAndWhiteList.second;
+      whitelist->dump();
       targets.emplace(kf, TargetedHaltsOnTraces(whitelist));
       ExecutionState *initialState = state->withStackFrame(caller, kf);
       prepareSymbolicArgs(*initialState);

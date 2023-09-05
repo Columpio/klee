@@ -241,8 +241,8 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
 
   recoverCallChain(locations, kinds);
 
-  if (!resultJson.verdict.has_value() || resultJson.verdict.value() != "TP")
-    return nonstd::nullopt;
+  // if (!resultJson.verdict.has_value() || resultJson.verdict.value() != "TP")
+  //   return nonstd::nullopt;
 
   return Result{std::move(locations), std::move(metadatas), id, std::move(errors)};
 }

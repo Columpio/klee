@@ -49,9 +49,9 @@ std::map<std::string, llvm::Type *> MockBuilder::getExternalGlobals() {
   }
   removeAliases(userModule, externals);
 
-  for (const auto &e : externals) {
-    klee_message("Mocking external variable %s", e.first.c_str());
-  }
+  // for (const auto &e : externals) {
+  //   klee_message("Mocking external variable %s", e.first.c_str());
+  // }
 
   return externals;
 }
@@ -193,7 +193,7 @@ void MockBuilder::buildExternalFunctionsDefinitions() {
 
     const auto nameToAnnotations = annotations.find(extName);
     if (nameToAnnotations != annotations.end()) {
-      klee_message("Annotation function %s", extName.c_str());
+      // klee_message("Annotation function %s", extName.c_str());
       const auto &annotation = nameToAnnotations->second;
 
       //      if (llvm::Function *f = userModule->getFunction(extName)) {
@@ -210,7 +210,7 @@ void MockBuilder::buildExternalFunctionsDefinitions() {
                                                annotation.returnStatements);
       buildAnnotationForExternalFunctionProperties(func, annotation.properties);
     } else {
-      klee_message("Mocking external function %s", extName.c_str());
+      // klee_message("Mocking external function %s", extName.c_str());
       // Default annotation for externals return
       buildAnnotationForExternalFunctionReturn(
           func, {std::make_shared<Statement::InitNull>()});
@@ -447,8 +447,8 @@ void MockBuilder::buildAnnotationForExternalFunctionArgs(
         }
         case Statement::Kind::Unknown:
         default:
-          klee_message("Annotation not implemented %s",
-                       statement->toString().c_str());
+          klee_warning_once(0, "Annotation not implemented %s",
+                            statement->toString().c_str());
           break;
         }
       }
@@ -566,8 +566,8 @@ void MockBuilder::buildAnnotationForExternalFunctionReturn(
     }
     case Statement::Kind::Unknown:
     default:
-      klee_message("Annotation: not implemented %s",
-                   statement->toString().c_str());
+      klee_warning_once(0, "Annotation: not implemented %s",
+                        statement->toString().c_str());
       break;
     }
   }
