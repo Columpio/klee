@@ -262,7 +262,7 @@ struct LocRange {
   void hasInside(InstrWithPrecision &kp);
   virtual void setRange(const KInstruction *ki) = 0;
 protected:
-  virtual void hasInsideInternal(InstrWithPrecision &kp) const = 0;
+  virtual bool hasInsideInternal(InstrWithPrecision &kp) const = 0;
 };
 
 class LineColumnRange final : public LocRange {
@@ -311,15 +311,15 @@ public:
     return std::to_string(startLine) + ":" + std::to_string(startColumn) + "-" + std::to_string(endLine) + ":" + std::to_string(endColumn);
   }
 
-  void hasInsideInternal(InstrWithPrecision &kp) const final {
+  bool hasInsideInternal(InstrWithPrecision &kp) const final {
     auto line = kp.ptr->getLine();
     if (!(startLine <= line && line <= endLine)) {
       kp.setNotFound();
-      return;
+      return false;
     }
     if (onlyLine()) {
       kp.precision = Precision::Line;
-      return;
+      return false;
     }
     auto column = kp.ptr->getColumn();
     auto ok = true;
@@ -331,6 +331,7 @@ public:
       kp.precision = Precision::Column;
     else
       kp.precision = Precision::Line;
+    return false;
   }
 
   bool operator==(const LineColumnRange &p) const {

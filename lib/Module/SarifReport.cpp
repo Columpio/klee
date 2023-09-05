@@ -391,8 +391,7 @@ void LocRange::hasInside(InstrWithPrecision &kp) {
     kp.setNotFound();
     return;
   }
-  hasInsideInternal(kp);
-  if (kp.precision >= Precision::Instruction)
+  if (hasInsideInternal(kp))
     setRange(kp.ptr);
 }
 
@@ -419,16 +418,19 @@ public:
     range.setRange(ki);
   }
 
-  void hasInsideInternal(InstrWithPrecision &kp) const final {
+  bool hasInsideInternal(InstrWithPrecision &kp) const final {
     range.hasInsideInternal(kp);
     if (kp.isNotFound())
-      return;
+      return false;
     if (kp.ptr->inst->getOpcode() != opCode)
-      return;
-    if (hasInsidePrecise(kp.ptr))
+      return false;
+    if (hasInsidePrecise(kp.ptr)) {
       kp.precision = Precision::Instruction;
-    else
+      return true;
+    } else {
       kp.precision = std::min(kp.precision, Precision::Column);
+      return false;
+    }
   }
 
 protected:
@@ -667,10 +669,16 @@ void Cooddy::AfterBlockLoc::isInsideInternal(BlockWithPrecision &bp, const Instr
   auto nextBlock = bp.ptr->basicBlock->getTerminator()->getSuccessor(indexOfNext);
   bp.ptr = bp.ptr->parent->blockMap.at(nextBlock);
   bp.precision = afterInst.precision;
+  range->setRange(bp.ptr->getFirstInstruction());
 }
 
 void Cooddy::AfterInstLoc::isInsideInternal(BlockWithPrecision &bp, const InstrWithPrecision &afterInst) const {
-  bp.precision = afterInst.ptr->inst->getOpcode() == opCode ? Precision::Instruction : afterInst.precision;
+  if (afterInst.ptr->inst->getOpcode() != opCode) {
+    bp.precision = std::min(afterInst.precision, Precision::Column);
+    return;
+  }
+  bp.precision = Precision::Instruction;
+  range->setRange(afterInst.ptr);
 }
 
 std::string Location::toString() const {
