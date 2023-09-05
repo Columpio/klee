@@ -7,6 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <list>
+
 #include "klee/Module/SarifReport.h"
 
 #include "klee/Module/KInstruction.h"
@@ -107,7 +109,7 @@ ReachWithoutError tryConvertCooddyNoErrorKind(const klee::Message &msg) {
   const auto &message = msg.text;
   if ("Assume return here" == message)
     return ReachWithoutError::Return;
-  if ("Null pointer returned as the result" == message)
+  if (startsWith(message, "Null pointer returned as"))
     return ReachWithoutError::AfterCall;
   if (startsWith(message, "Use after free returned as"))
     return ReachWithoutError::AfterCall;
@@ -155,7 +157,7 @@ EventKind convertKindJson(ToolName toolName, const optional<std::string> &ruleId
   return EventKind(tryConvertErrorKind(toolName, ruleId, mOpt));
 }
 
-optional<ref<Location>>
+optional<std::pair<ref<Location>, EventKind> >
 tryConvertLocationJson(ToolName toolName, const optional<std::string> &ruleId, const LocationJson &locationJson) {
   const auto &physicalLocation = locationJson.physicalLocation;
   if (!physicalLocation.has_value()) {
@@ -175,9 +177,23 @@ tryConvertLocationJson(ToolName toolName, const optional<std::string> &ruleId, c
   auto kind = convertKindJson(toolName, ruleId, region->message);
   auto filename = *(artifactLocation->uri);
 
-  return Location::create(std::move(filename), *(region->startLine),
+  auto loc = Location::create(std::move(filename), *(region->startLine),
                           region->endLine, region->startColumn,
                           region->endColumn, toolName, kind);
+  return std::make_pair(loc, std::move(kind));
+}
+
+void recoverCallChain(std::vector<ref<Location>> &locations, std::vector<EventKind> &kinds) {
+  std::list<ref<Location>> result;
+  auto lit = locations.begin();
+  auto kit = kinds.begin(), kite = kinds.end();
+  for (; kit != kite; kit++, lit++) {
+    if (kit->kind == ReachWithoutError::AfterCall)
+      result.push_front(*lit);
+    else
+      result.push_back(*lit);
+  }
+  locations.assign(result.begin(), result.end());
 }
 
 optional<Result> tryConvertResultJson(const ResultJson &resultJson,
@@ -190,6 +206,7 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
   }
 
   std::vector<ref<Location>> locations;
+  std::vector<EventKind> kinds;
   std::vector<optional<json>> metadatas;
 
   if (resultJson.codeFlows.size() > 0) {
@@ -202,23 +219,27 @@ optional<Result> tryConvertResultJson(const ResultJson &resultJson,
         return nonstd::nullopt;
       }
 
-      auto maybeLocation = tryConvertLocationJson(toolName, resultJson.ruleId, *threadFlowLocation.location);
-      if (maybeLocation.has_value()) {
-        locations.push_back(*maybeLocation);
+      auto mblk = tryConvertLocationJson(toolName, resultJson.ruleId, *threadFlowLocation.location);
+      if (mblk.has_value()) {
+        locations.push_back(mblk->first);
+        kinds.push_back(mblk->second);
         metadatas.push_back(std::move(threadFlowLocation.metadata));
       }
     }
   } else {
     assert(resultJson.locations.size() == 1);
-    auto maybeLocation = tryConvertLocationJson(toolName, resultJson.ruleId, resultJson.locations[0]);
-    if (maybeLocation.has_value()) {
-      locations.push_back(*maybeLocation);
+    auto mblk = tryConvertLocationJson(toolName, resultJson.ruleId, resultJson.locations[0]);
+    if (mblk.has_value()) {
+      locations.push_back(mblk->first);
+      kinds.push_back(mblk->second);
     }
   }
 
   if (locations.empty()) {
     return nonstd::nullopt;
   }
+
+  recoverCallChain(locations, kinds);
 
   return Result{std::move(locations), std::move(metadatas), id, std::move(errors)};
 }
@@ -514,9 +535,8 @@ Location *Location::createCooddy(std::string &&filename_, LineColumnRange &range
   }
   case ReachWithoutError::Free:
   case ReachWithoutError::Call:
-    return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
   case ReachWithoutError::AfterCall:
-    return new Cooddy::AfterBlockLoc(std::move(filename_), std::make_unique<InstructionRange>(std::move(range), Instruction::Call), kind, 0);
+    return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Call);
   case ReachWithoutError::Reach:
     return nullptr;
   }
