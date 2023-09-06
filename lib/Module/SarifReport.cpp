@@ -521,7 +521,7 @@ Location *Location::createCooddy(std::string &&filename_, LineColumnRange &range
         return nullptr;
       }
     } else if (std::find(kind.kinds.begin(), kind.kinds.end(), ReachWithError::MustBeNullPointerException) != kind.kinds.end())
-      return new Cooddy::AfterInstLoc(std::move(filename_), std::make_unique<LineColumnRange>(std::move(range)), kind, Instruction::Load);
+      return new Cooddy::OpCodeLoc(std::move(filename_), std::move(range), kind, Instruction::Load);
     return nullptr;
   }
   switch (kind.kind) {
